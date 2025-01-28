@@ -14,6 +14,7 @@ from lm_experiments_tools.utils import get_cls_by_name, get_optimizer, prepare_r
 import lm_experiments_tools.optimizers as optimizers
 import accelerate
 from accelerate.logging import get_logger
+from fvcore.nn import FlopCountAnalysis
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -605,6 +606,29 @@ if __name__ == '__main__':
 
         trainer.save_metrics(save_path=args.model_path)
     else:
+        from functools import partial
+        import inspect
+        class UnpackWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super(UnpackWrapper, self).__init__()
+                self.model = model
+
+            def forward(self, batch):
+                args = self.get_function_arguments(self.model.forward)
+                # print(args)
+                args = [a for a in args if a in batch]
+                # print(batch, args)
+                batch = dict(zip(args, [batch[a] for a in args]))
+                return self.model(**batch)
+            
+            def get_function_arguments(self, func):
+                sig = inspect.signature(func)
+                return [param.name for param in sig.parameters.values()]
+        batch = next(iter(valid_dataloader))
+        # partial_model = partial(trainer.model.forward, **next(iter(valid_dataloader)))
+        flop_analysis = FlopCountAnalysis(UnpackWrapper(trainer.model.module), batch)
+        logger.info(f"FLOPs: {flop_analysis.total()}")
+        trainer.run.log({'FLOPs': flop_analysis.total()})
         if valid_dataloader is not None:
             logger.info('Running validation on valid data:')
             trainer.validate(valid_dataloader, write_tb=True, split='valid')

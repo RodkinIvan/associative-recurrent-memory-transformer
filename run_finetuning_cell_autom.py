@@ -114,6 +114,8 @@ parser.add_argument('--max_hop', type=int, default=4, help='number of cycles in 
 parser.add_argument('--time_penalty', type=float, default=0.0, help='time penalty coefficient in ACT loss')
 parser.add_argument('--act_type', type=str, default=None, help='what is in ACT (options: layer, associative)')
 
+parser.add_argument('--act_format', type=str, default=None, help='')
+
 
 parser.add_argument('--no_denom', action='store_true', default=False,
                     help='use no denominator in ARMT')
@@ -340,6 +342,9 @@ if __name__ == '__main__':
             
             if args.act_type is not None:
                 mem_cell_args['act_type'] = args.act_type
+
+            if args.act_format is not None:
+                mem_cell_args['act_format'] = args.act_format
             if args.noisy_halting:
                 mem_cell_args['noisy_halting'] = args.noisy_halting
 
@@ -534,6 +539,30 @@ if __name__ == '__main__':
             # trainer.validate(test_dataloader, write_tb=True, split='test')
         trainer.save_metrics(save_path=args.model_path)
     else:
+        from fvcore.nn import FlopCountAnalysis
+        from functools import partial
+        import inspect
+        class UnpackWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super(UnpackWrapper, self).__init__()
+                self.model = model
+
+            def forward(self, batch):
+                args = self.get_function_arguments(self.model.forward)
+                # print(args)
+                args = [a for a in args if a in batch]
+                # print(batch, args)
+                batch = dict(zip(args, [batch[a] for a in args]))
+                return self.model(**batch)
+            
+            def get_function_arguments(self, func):
+                sig = inspect.signature(func)
+                return [param.name for param in sig.parameters.values()]
+        batch = next(iter(valid_dataloader))
+        # partial_model = partial(trainer.model.forward, **next(iter(valid_dataloader)))
+        flop_analysis = FlopCountAnalysis(UnpackWrapper(trainer.model.module), batch)
+        logger.info(f"FLOPs: {flop_analysis.total()}")
+        trainer.run.log({'FLOPs': flop_analysis.total()})
         # run validation, do not write to tensorboard
         # logger.info('Running validation on train set:')
         # trainer.validate(train_dataloader, split='train', write_tb=True)
