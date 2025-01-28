@@ -73,6 +73,8 @@ parser.add_argument('--max_hop', type=int, default=4, help='number of cycles in 
 parser.add_argument('--time_penalty', type=float, default=0.0, help='time penalty coefficient in ACT loss')
 parser.add_argument('--act_type', type=str, default=None, help='what is in ACT (options: layer, associative)')
 
+parser.add_argument('--act_format', type=str, default=None, help='')
+
 parser.add_argument('--no_denom', action='store_true', default=False,
                     help='use no denominator in ARMT')
 parser.add_argument('--freeze_mem', action='store_true', default=False,
@@ -345,6 +347,8 @@ if __name__ == '__main__':
         mem_cell_args['max_hop'] = args.max_hop
         if args.act_type is not None:
             mem_cell_args['act_type'] = args.act_type
+        if args.act_format is not None:
+            mem_cell_args['act_format'] = args.act_format
     if args.num_mem_tokens is not None:
         mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
         mem_cell_args['wrap_pos'] = args.wrap_pos
