@@ -283,8 +283,9 @@ if __name__ == '__main__':
 
     right = 0
     left = -args.array_size
-    rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1)
-    rule_right = rule_left + args.rule_len
+    if args.learn_rule:
+        rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1)
+        rule_right = rule_left + args.rule_len
 
     train_rnd_generator = torch.Generator()
     train_rnd_generator.manual_seed(args.seed)
@@ -469,7 +470,8 @@ if __name__ == '__main__':
         metrics = {}
         l = data['labels'].size(1)
         y, p = data['labels'][:, l+left:l+right], data['predictions'][:, left-1:right-1]
-        y_rule, p_rule = data['labels'][:, rule_left:rule_right], data['predictions'][:, rule_left-1:rule_right-1]
+        if args.learn_rule:
+            y_rule, p_rule = data['labels'][:, rule_left:rule_right], data['predictions'][:, rule_left-1:rule_right-1]
 
         if accelerator.is_main_process and args.show_valid_examples > 0:
             for i in range(min(args.show_valid_examples, len(y))):
@@ -498,9 +500,10 @@ if __name__ == '__main__':
         metrics['bit_accuracy'] = np.mean(np.array(y) == np.array(p))
         metrics['exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p, y)])
 
-        metrics['rule_bit_accuracy'] = np.mean(np.array(y_rule) == np.array(p_rule))
-        assert p_rule.size(1) == y_rule.size(1) == rule_len
-        metrics['rule_exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p_rule, y_rule)])
+        if args.learn_rule:
+            metrics['rule_bit_accuracy'] = np.mean(np.array(y_rule) == np.array(p_rule))
+            assert p_rule.size(1) == y_rule.size(1) == rule_len
+            metrics['rule_exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p_rule, y_rule)])
         if args.act_on:
             metrics['n_updates'] = torch.mean(data['n_updates']).item()
             metrics['remainders'] = torch.mean(data['remainders']).item()
