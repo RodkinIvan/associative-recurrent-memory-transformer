@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=4
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -23,7 +23,7 @@ MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
 SHIFTS=(1)
 LRS=(3e-4)      
-BSS=(128)
+BSS=(256)
 
 INPUT_TOKENS=20
 N_HEADS=1
@@ -43,7 +43,7 @@ python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num
 cd ../..
 MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
-for N in 5
+for N in 18
 do
 
 

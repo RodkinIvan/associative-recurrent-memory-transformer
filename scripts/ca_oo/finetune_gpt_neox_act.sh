@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=0
-NP=1 # ./test_bert_sparse_pretrain_train_valid.sh
+export CUDA_VISIBLE_DEVICES=4
+NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
 cd ../..
-export WANDB_PROJECT=gpt_neox
+export WANDB_PROJECT=cellular_automata
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
@@ -41,9 +41,9 @@ ACT_TYPE=layer
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
 cd ../..
-MODEL_CFG=~/associative-recurrent-memory-transformer/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
+MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
-for N in 5
+for N in 46
 do
 
 
@@ -75,7 +75,7 @@ MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29503 run_finetuning_gpt_neox_2.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_gpt_neox_2.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
         --model_cfg $MODEL_CFG \
@@ -110,7 +110,9 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --act_on \
         --max_hop $MAX_HOP \
         --act_type $ACT_TYPE \
-        --freeze_mem
+        --freeze_mem \
+        --act_format transformer 
+        # --validate_only
 done
 done
 done
