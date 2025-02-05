@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=1
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -24,9 +24,9 @@ SHIFTS=(3)
 LRS=(3e-4)
 BSS=(256)
 
-MEMORY_SIZE=1
-INPUT_TOKENS=1000
-D_MEM=1
+MEMORY_SIZE=16
+INPUT_TOKENS=20
+D_MEM=32
 N_HEADS=1
 
 ACT_TYPE=layer
@@ -42,7 +42,7 @@ MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}
 
 
 
-for N in 8
+for N in 47
 do
 
 
@@ -81,9 +81,9 @@ MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_cell_autom.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500+$N)) run_finetuning_cell_autom.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \
+        --model_path ../runs/lm_long/armt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \
         --model_cfg $MODEL_CFG \
         --dataset_path $DATASET_PATH \
         --model_type $MODEL_TYPE \
@@ -114,12 +114,15 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --save_best \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
-        --freeze_mem \
-        --validate_only
+        --repeat_state \
+        --learn_rule
         # --act_on \
         # --max_hop $MAX_HOP \
         # --time_penalty 3e-4 \
         # --act_type $ACT_TYPE \
+        # --noisy_halting
+        # --act_format transformer
+        # --repeat_state
 done
 done
 done

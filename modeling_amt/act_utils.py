@@ -293,6 +293,7 @@ class ACT_transformer(nn.Module):
             nhead=num_heads,
             dim_feedforward=hidden_size,
             dropout=dropout,
+            norm_first=True
         )
         self.transformer = TransformerEncoder(transformer_layer, 
                                               num_layers=num_transformer_layers)

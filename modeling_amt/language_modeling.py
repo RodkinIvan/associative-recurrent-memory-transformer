@@ -294,8 +294,10 @@ class AdaptiveAssociativeLayerWrapper2(AssociativeLayerWrapper):
             self.act = ACT_transformer(d_model)
         elif constant_depth:
             self.act = ACT_constant_depth()
+        elif act_format == 'linear':
+            self.act =  ACT_basic(d_model)
         else:
-            self.act = ACT_basic(d_model)
+            raise NotImplemetedError
 
         self.depth = max_hop
         self.max_length = 1024
@@ -402,7 +404,7 @@ class AssociativeMemoryCell(torch.nn.Module):
                 gating=gating,
             )
             if act_on and act_type != 'model':
-                kw['act_format']=act_format,
+                kw['act_format'] = act_format
             if act_on and act_type == 'model' and act_format != 'linear':
                 raise NotImplementedError
             if act_on and (act_type != 'model'):

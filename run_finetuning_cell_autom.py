@@ -114,6 +114,8 @@ parser.add_argument('--max_hop', type=int, default=4, help='number of cycles in 
 parser.add_argument('--time_penalty', type=float, default=0.0, help='time penalty coefficient in ACT loss')
 parser.add_argument('--act_type', type=str, default=None, help='what is in ACT (options: layer, associative)')
 
+parser.add_argument('--act_format', type=str, default=None, help='')
+
 
 parser.add_argument('--no_denom', action='store_true', default=False,
                     help='use no denominator in ARMT')
@@ -282,8 +284,9 @@ if __name__ == '__main__':
 
     right = 0
     left = -args.array_size
-    rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1)
-    rule_right = rule_left + args.rule_len
+    if args.learn_rule:
+        rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1)
+        rule_right = rule_left + args.rule_len
 
     train_rnd_generator = torch.Generator()
     train_rnd_generator.manual_seed(args.seed)
@@ -348,6 +351,9 @@ if __name__ == '__main__':
             
             if args.act_type is not None:
                 mem_cell_args['act_type'] = args.act_type
+
+            if args.act_format is not None:
+                mem_cell_args['act_format'] = args.act_format
             if args.noisy_halting:
                 mem_cell_args['noisy_halting'] = args.noisy_halting
             if args.constant_depth:
@@ -474,6 +480,8 @@ if __name__ == '__main__':
         metrics = {}
         l = data['labels'].size(1)
         y, p = data['labels'][:, l+left:l+right], data['predictions'][:, left-1:right-1]
+        if args.learn_rule:
+            y_rule, p_rule = data['labels'][:, rule_left:rule_right], data['predictions'][:, rule_left-1:rule_right-1]
 
         if accelerator.is_main_process and args.show_valid_examples > 0:
             for i in range(min(args.show_valid_examples, len(y))):
@@ -501,6 +509,11 @@ if __name__ == '__main__':
                 metrics[f'ce_loss_{i}'] = data[f'ce_loss_{i}'].mean()
         metrics['bit_accuracy'] = np.mean(np.array(y) == np.array(p))
         metrics['exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p, y)])
+
+        if args.learn_rule:
+            metrics['rule_bit_accuracy'] = np.mean(np.array(y_rule) == np.array(p_rule))
+            assert p_rule.size(1) == y_rule.size(1) == rule_len
+            metrics['rule_exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p_rule, y_rule)])
         if args.act_on:
             metrics['n_updates'] = torch.mean(data['n_updates']).item()
             metrics['remainders'] = torch.mean(data['remainders']).item()
@@ -548,6 +561,30 @@ if __name__ == '__main__':
             # trainer.validate(test_dataloader, write_tb=True, split='test')
         trainer.save_metrics(save_path=args.model_path)
     else:
+        from fvcore.nn import FlopCountAnalysis
+        from functools import partial
+        import inspect
+        class UnpackWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super(UnpackWrapper, self).__init__()
+                self.model = model
+
+            def forward(self, batch):
+                args = self.get_function_arguments(self.model.forward)
+                # print(args)
+                args = [a for a in args if a in batch]
+                # print(batch, args)
+                batch = dict(zip(args, [batch[a] for a in args]))
+                return self.model(**batch)
+            
+            def get_function_arguments(self, func):
+                sig = inspect.signature(func)
+                return [param.name for param in sig.parameters.values()]
+        batch = next(iter(valid_dataloader))
+        # partial_model = partial(trainer.model.forward, **next(iter(valid_dataloader)))
+        flop_analysis = FlopCountAnalysis(UnpackWrapper(trainer.model.module), batch)
+        logger.info(f"FLOPs: {flop_analysis.total()}")
+        trainer.run.log({'FLOPs': flop_analysis.total()})
         # run validation, do not write to tensorboard
         # logger.info('Running validation on train set:')
         # trainer.validate(train_dataloader, split='train', write_tb=True)

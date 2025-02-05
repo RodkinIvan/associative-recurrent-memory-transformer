@@ -14,6 +14,7 @@ from lm_experiments_tools.utils import get_cls_by_name, get_optimizer, prepare_r
 import lm_experiments_tools.optimizers as optimizers
 import accelerate
 from accelerate.logging import get_logger
+from fvcore.nn import FlopCountAnalysis
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -72,6 +73,8 @@ parser.add_argument('--act_on', action='store_true', default=False,
 parser.add_argument('--max_hop', type=int, default=4, help='number of cycles in ACT')
 parser.add_argument('--time_penalty', type=float, default=0.0, help='time penalty coefficient in ACT loss')
 parser.add_argument('--act_type', type=str, default=None, help='what is in ACT (options: layer, associative)')
+
+parser.add_argument('--act_format', type=str, default=None, help='')
 
 parser.add_argument('--no_denom', action='store_true', default=False,
                     help='use no denominator in ARMT')
@@ -349,6 +352,9 @@ if __name__ == '__main__':
             mem_cell_args['act_type'] = args.act_type
         if args.constant_depth:
             mem_cell_args['constant_depth'] = args.constant_depth
+        if args.act_format is not None:
+            mem_cell_args['act_format'] = args.act_format
+
     if args.num_mem_tokens is not None:
         mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
         mem_cell_args['wrap_pos'] = args.wrap_pos
@@ -605,6 +611,29 @@ if __name__ == '__main__':
 
         trainer.save_metrics(save_path=args.model_path)
     else:
+        from functools import partial
+        import inspect
+        class UnpackWrapper(torch.nn.Module):
+            def __init__(self, model):
+                super(UnpackWrapper, self).__init__()
+                self.model = model
+
+            def forward(self, batch):
+                args = self.get_function_arguments(self.model.forward)
+                # print(args)
+                args = [a for a in args if a in batch]
+                # print(batch, args)
+                batch = dict(zip(args, [batch[a] for a in args]))
+                return self.model(**batch)
+            
+            def get_function_arguments(self, func):
+                sig = inspect.signature(func)
+                return [param.name for param in sig.parameters.values()]
+        batch = next(iter(valid_dataloader))
+        # partial_model = partial(trainer.model.forward, **next(iter(valid_dataloader)))
+        flop_analysis = FlopCountAnalysis(UnpackWrapper(trainer.model.module), batch)
+        logger.info(f"FLOPs: {flop_analysis.total()}")
+        trainer.run.log({'FLOPs': flop_analysis.total()})
         if valid_dataloader is not None:
             logger.info('Running validation on valid data:')
             trainer.validate(valid_dataloader, write_tb=True, split='valid')
