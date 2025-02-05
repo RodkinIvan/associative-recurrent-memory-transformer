@@ -502,7 +502,7 @@ if __name__ == '__main__':
 
         if args.learn_rule:
             metrics['rule_bit_accuracy'] = np.mean(np.array(y_rule) == np.array(p_rule))
-            assert p_rule.size(1) == y_rule.size(1) == rule_len
+            assert p_rule.size(1) == y_rule.size(1) == args.rule_len
             metrics['rule_exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p_rule, y_rule)])
         if args.act_on:
             metrics['n_updates'] = torch.mean(data['n_updates']).item()
