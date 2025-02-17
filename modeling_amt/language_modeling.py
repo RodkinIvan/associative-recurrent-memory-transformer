@@ -328,12 +328,14 @@ class AssociativeMemoryCell(torch.nn.Module):
                  act_on=False,
                  max_hop=4,
                  act_type='associative',
-                 attend_to_previous_input=False
+                 attend_to_previous_input=False,
+                 use_sink=False
         ):
         super().__init__()
         self.model = base_model
         self.attend_to_previous_input = attend_to_previous_input
         self.previous_input = None
+        self.use_sink = use_sink
 
         self.RWKV_ARMT = False #isinstance(self.model, RWKVModel)
 
@@ -389,6 +391,9 @@ class AssociativeMemoryCell(torch.nn.Module):
         memory_dim =  getattr(self.model.config, 'n_embd', self.model.config.hidden_size)
         memory_weights = torch.randn((num_mem_tokens, memory_dim), device=embeddings.weight.data.device) * embeddings.weight.data.std()
         self.register_parameter('memory', torch.nn.Parameter(memory_weights, requires_grad=True))
+        if self.use_sink:
+            self.sink = torch.nn.Parameter(torch.randn((1, memory_dim), device=embeddings.weight.data.device), requires_grad=True)
+
 
     def wrap_positional_embeddings(self, num_mem_tokens):
         num_pos_embs, emb_dim = self.model.transformer.wpe.weight.shape
@@ -405,7 +410,11 @@ class AssociativeMemoryCell(torch.nn.Module):
 
     def set_memory(self, input_shape):
         memory = self.memory.repeat(input_shape[0], 1, 1)
-        return memory
+        if self.use_sink:
+            sink = self.sink.repeat(input_shape[0], 1, 1)
+        else:
+            sink = None
+        return memory, sink
 
     def zero_mem(self):
         for layer in self.layers:
@@ -455,17 +464,20 @@ class AssociativeMemoryCell(torch.nn.Module):
         return out
 
     def process_input(self, input_ids, **kwargs):
-        memory_state = self.set_memory(input_ids.shape)
+        memory_state, sink = self.set_memory(input_ids.shape)
         seg_kwargs = dict(**kwargs)
         inputs_embeds = kwargs.get('inputs_embeds')
         if inputs_embeds is None:
             inputs_embeds = self.model.get_input_embeddings()(input_ids)
-        inputs_embeds = torch.cat([inputs_embeds, memory_state], dim=1)
+        if self.use_sink:
+            inputs_embeds = torch.cat([sink, inputs_embeds, memory_state], dim=1)
+        else:
+            inputs_embeds = torch.cat([inputs_embeds, memory_state], dim=1)
         
         seg_kwargs['input_ids'] = None
         seg_kwargs['inputs_embeds'] = inputs_embeds
         if kwargs.get('attention_mask') is not None:
-            seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'])
+            seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], use_sink=self.use_sink)
             if kwargs.get('prev_attn_mask') is not None:
                 seg_kwargs['attention_mask'] = torch.cat([kwargs['prev_attn_mask'], seg_kwargs['attention_mask']], dim=-1)
             if 'prev_attn_mask' in seg_kwargs:
@@ -482,22 +494,24 @@ class AssociativeMemoryCell(torch.nn.Module):
             ]).long().unsqueeze(0)
         return seg_kwargs
     
-    def pad_attention_mask(self, attention_mask):
+    def pad_attention_mask(self, attention_mask, use_sink=False):
         if self.num_mem_tokens in {0, None}:
             return attention_mask
         else:
             shape = list(attention_mask.shape)
-            shape[1] += self.num_mem_tokens
+            shape[1] += self.num_mem_tokens + use_sink
             mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
-            mask[:, :-self.num_mem_tokens] = attention_mask
+            mask[:, int(use_sink):-self.num_mem_tokens] = attention_mask
             return mask
     
     def process_output(self, model_outputs, labels, labels_mask, **kwargs):
+        
+
         if (self.num_mem_tokens not in {0, None}) and not self.RWKV_ARMT:
             out = CausalLMOutputWithCrossAttentions()
-            out['logits'] = model_outputs.logits[:, :-self.num_mem_tokens]
+            out['logits'] = model_outputs.logits[:, int(self.use_sink):-self.num_mem_tokens]
             if kwargs.get('output_hidden_states'):
-                out['hidden_states'] = [lh[:, :-self.num_mem_tokens] for lh in model_outputs.hidden_states]
+                out['hidden_states'] = [lh[:, int(self.use_sink):-self.num_mem_tokens] for lh in model_outputs.hidden_states]
             if kwargs.get('output_attentions'):
                 out['attentions'] = model_outputs['attentions']
         else:

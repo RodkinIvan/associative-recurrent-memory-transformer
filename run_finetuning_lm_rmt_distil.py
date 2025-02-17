@@ -97,6 +97,7 @@ parser.add_argument('--max_val_segments', type=int, default=1, help='maximal seg
 parser.add_argument('--vary_n_segments', action='store_true', default=False, help='Randomly choose segment number from 1 to max_n_segments')
 parser.add_argument('--random_segment_size', action='store_true', default=False, help='Randomly choose segment size from input_size to max_n_segments * input_size with powers of 2')
 parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
+parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
 parser.add_argument('--sum_loss', action='store_true', default=False,
                     help='with this flag task loss from all segments is summed')
 parser.add_argument('--bptt_depth', type=int, default=-1, help='max number of previous segments in gradient computation.')
@@ -462,6 +463,9 @@ if __name__ == '__main__':
             mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
         if args.no_denom is not None:
             mem_cell_args['use_denom'] = not args.no_denom
+        
+        if args.use_sink:
+            mem_cell_args['use_sink'] = args.use_sink
 
         cell = memory_cell_cls(**mem_cell_args)
         model = recurrent_wrapper_cls(cell, 
