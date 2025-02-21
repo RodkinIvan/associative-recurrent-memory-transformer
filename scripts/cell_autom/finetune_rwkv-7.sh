@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 export CUDA_VISIBLE_DEVICES=0
-export RWKV_NO_CUDA=1
-export RWKV_JIT_ON=0
+# export RWKV_NO_CUDA=1
+# export RWKV_JIT_ON=0
 export CHUNK_LEN=1
+export RWKV_MY_TESTING=x070
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -14,7 +15,7 @@ TASK_NAME=CA
 MODEL_TYPE=decoder
 MEMORY_CELL=baselines.dummy.language_modeling:MemoryCell
 RECURRENT_WRAPPER=baselines.dummy.language_modeling:RecurrentWrapper
-BACKBONE_CLS=baselines.rwkv.language_modeling:RWKV_v6
+BACKBONE_CLS=baselines.rwkv.language_modeling:RWKV_v7_tiny
 
 DATASET_PATH=irodkin/1dCA_r2s20T20
 
@@ -27,7 +28,7 @@ SHIFTS=(2)
 LRS=(3e-4)
 BSS=(256)
 
-MODEL_NAME=~/lab/rwkv6_tiny.pth
+MODEL_NAME=trash
 MEMORY_SIZE=1
 INPUT_TOKENS=1000
 D_MEM=1
@@ -64,6 +65,8 @@ VAL_SEQ_LEN=$(((INPUT_SIZE)*MAX_VAL_SEGMENTS))
 SHIFT=${SHIFTS[j]}
 
 BS=${BSS[j]}
+
+GRAD_ACC_STEPS=$(($TBS/$BS/$NP))
 K2=-1
 for SEGMENT_ORDERING in regular
 do
@@ -83,9 +86,20 @@ do
 # fi
 MODEL_CPT=None
 
+cd accel_configs/
+python create_config.py \
+        --bf16 \
+        --train_batch_size $TBS\
+        --train_micro_batch_size_per_gpu $BS\
+        --gradient_accumulation_steps $GRAD_ACC_STEPS\
+        --np $NP\
+        --gradient_clipping 1.0
+cd ..
+ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml
+
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_cell_autom.py \
+accelerate launch --num_processes $NP --config_file  $ACCEL_CONFIG --main_process_port $((29500 + $N)) --mixed_precision bf16 run_finetuning_cell_autom.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \
         --from_pretrained $MODEL_NAME \
@@ -104,7 +118,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --prediction_shift $SHIFT \
         --optimize_metric exact_match --optimize_mode max \
         --batch_size $BS \
-        --gradient_accumulation_steps $(($TBS/$BS/$NP)) \
+        --gradient_accumulation_steps $GRAD_ACC_STEPS \
         --iters $ITERS \
         --num_training_steps $(($ITERS*2))\
         --optimizer AdamW  --weight_decay 0.01 \
@@ -118,7 +132,8 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --save_best \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
-        --freeze_mem
+        --freeze_mem \
+        --grad_cp
         # --act_on \
         # --max_hop $MAX_HOP \
         # --time_penalty 3e-4 \
