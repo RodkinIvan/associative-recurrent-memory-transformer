@@ -11,8 +11,8 @@ from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 from baselines.rwkv.RWKV_v5.src.model import RWKV as RWKV5
 from baselines.rwkv.RWKV_v6.src.model import RWKV as RWKV6
-from baselines.rwkv.RWKV_PEFT.rwkvt.rwkv7.model import RWKV7
-from baselines.rwkv.RWKV_PEFT.rwkvt.infctx_module import BlockStateList
+from baselines.rwkv.rwkvt.rwkv7.model import RWKV7
+from baselines.rwkv.rwkvt.infctx_module import BlockStateList
 
 from munch import Munch
 
