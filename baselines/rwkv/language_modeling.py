@@ -3,7 +3,9 @@ import os
 os.environ["RWKV_TRAIN_TYPE"] = 'infctx'
 os.environ["WKV"] = 'fla'
 # os.environ["RWKV_FLOAT_MODE"] = "bf16"
-# os.environ['RWKV_MY_TESTING'] = 'x060'
+if "RWKV_MY_TESTING" not in os.environ:
+    os.environ['RWKV_MY_TESTING'] = 'x060'
+    print(f"*** Setting default RWKV_MY_TESTING = {os.environ['RWKV_MY_TESTING']} ***")
 import math
 import torch
 from torch.nn import CrossEntropyLoss
