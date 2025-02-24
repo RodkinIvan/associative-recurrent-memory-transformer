@@ -166,6 +166,9 @@ parser.add_argument('--relative_step', action='store_true', default=False,
                     help='Adafactor relative_step (default: False)')
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
+parser.add_argument('--predict_from_mask', action='store_true', default=False,
+                    help='Diables autoregressive generation')
+
 
 
 from tqdm.auto import tqdm
@@ -221,6 +224,7 @@ if __name__ == '__main__':
         block_size = (args.segment_size + 1) * (1 + args.repeat_state)
         sep_token, gen_token, eos_token = 100, 101, 102
         rule_token = 103
+        mask_token = 104
 
         def collate_fn(batch, valid=False):
             for i, b in enumerate(batch):
@@ -255,6 +259,8 @@ if __name__ == '__main__':
             labels = torch.stack([torch.tensor(b['labels']) for b in batch], dim=0)
             if args.learn_rule:
                 input_ids[:, rule_left:rule_right] = rule_token
+            if args.predict_from_mask:
+                input_ids[:, left:] = mask_token
             attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
             
             labels_mask = torch.zeros_like(input_ids).bool()
