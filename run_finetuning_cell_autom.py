@@ -57,6 +57,7 @@ parser.add_argument('--report_to', type=str, default='wandb', help='')
 parser.add_argument('--validate_only', action='store_true', default=False,
                     help='Skip training and run only validation. (default: False)')
 
+parser.add_argument('--grad_cp',action='store_true', default=False, help='enable gradient_checkpointing')
 parser.add_argument('--noisy_halting', action='store_true', default=False,
                     help='add noise to halting')
 parser.add_argument('--output_last_segment_only', action='store_true', default=False,
@@ -166,6 +167,9 @@ parser.add_argument('--relative_step', action='store_true', default=False,
                     help='Adafactor relative_step (default: False)')
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
+parser.add_argument('--predict_from_mask', action='store_true', default=False,
+                    help='Diables autoregressive generation')
+
 
 parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 parser.add_argument('--predict_from_mask', action='store_true', default=False,
@@ -326,7 +330,10 @@ if __name__ == '__main__':
         model = model_cls(config=model_cfg)
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
-        model = model_cls.from_pretrained(args.from_pretrained)
+        model_args = dict()
+        if args.grad_cp:
+            model_args['grad_cp'] = args.grad_cp
+        model = model_cls.from_pretrained(args.from_pretrained, **model_args)
 
     # ## add [GEN] token
     # model.resize_token_embeddings(len(tokenizer))

@@ -9,8 +9,12 @@ from munch import Munch
 import os
 
 from modeling_amt.act_utils import ACT_basic, gen_timing_signal, ACTForWholeARMT, ACT_transformer, ACT_constant_depth, ACTForWholeARMT_constant_depth
-from baselines.rwkv.language_modeling import RWKVModel
-
+try:
+    from baselines.rwkv.language_modeling import RWKVModel
+    RWKV_imported = True
+except ImportError:
+    print("*** Can't import RWKV model ***")
+    RWKV_imported = False
 def dpfp(x, nu=1):
   x = torch.cat([r(x), r(-x)], dim=-1)
   x_rolled = torch.cat([x.roll(shifts=j, dims=-1)
@@ -376,8 +380,8 @@ class AssociativeMemoryCell(torch.nn.Module):
         ):
         super().__init__()
         self.model = base_model
-
-        self.RWKV_ARMT = isinstance(self.model, RWKVModel)
+        
+        self.RWKV_ARMT = isinstance(self.model, RWKVModel) if RWKV_imported else False
 
         self.num_mem_tokens = num_mem_tokens
         self.d_mem = d_mem

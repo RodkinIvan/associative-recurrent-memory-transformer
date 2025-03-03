@@ -2,8 +2,10 @@ import sys
 import os
 os.environ["RWKV_TRAIN_TYPE"] = 'infctx'
 os.environ["WKV"] = 'fla'
-os.environ['RWKV_MY_TESTING'] = 'x060'
 # os.environ["RWKV_FLOAT_MODE"] = "bf16"
+if "RWKV_MY_TESTING" not in os.environ:
+    os.environ['RWKV_MY_TESTING'] = 'x060'
+    print(f"*** Setting default RWKV_MY_TESTING = {os.environ['RWKV_MY_TESTING']} ***")
 import math
 import torch
 from torch.nn import CrossEntropyLoss
@@ -11,6 +13,9 @@ from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 from baselines.rwkv.RWKV_v5.src.model import RWKV as RWKV5
 from baselines.rwkv.RWKV_v6.src.model import RWKV as RWKV6
+from baselines.rwkv.rwkvt.rwkv7.model import RWKV7
+from baselines.rwkv.rwkvt.infctx_module import BlockStateList
+
 from munch import Munch
 
 class RWKVModel(torch.nn.Module):
@@ -42,6 +47,54 @@ class RWKVModel(torch.nn.Module):
 
     def get_input_embeddings(self):
         return self.model.emb
+    
+class RWKV_v7_tiny(RWKVModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        
+        self.config = Munch(
+            n_embd=128,
+            hidden_size=128,
+            vocab_size=128, 
+            n_layer=4, 
+            my_testing='x070', 
+            head_size_a=64, dim_att=128, 
+            head_size_divisor=8, 
+            chunk_ctx=256,
+            grad_cp=kwargs.get("grad_cp", False)
+        )
+        self.model = RWKV7(self.config)
+
+    @staticmethod
+    def from_pretrained(*_args, **kwargs):
+        load = _args[0]
+        args = dict(
+            load_model=load,
+            grad_cp=kwargs.get("grad_cp", False)
+        )
+        model = RWKV_v7_tiny(**args)
+        return model
+    
+    def init_state(self, input_ids, inputs_embeds):
+        x = input_ids if inputs_embeds is None else input_ids
+        state = BlockStateList.create(
+            N=self.config.n_layer, 
+            B=x.shape[0], 
+            C=self.config.n_embd, 
+            H=self.config.n_embd // self.config.head_size_a, 
+            device=x.device, 
+            dtype=torch.bfloat16 if inputs_embeds is None else inputs_embeds.dtype
+        )
+        return (state.shift_states, state.wkv_states)
+
+    def forward(self, input_ids=None, inputs_embeds=None, state=None, attention_mask=None, *args, **kwargs):
+        if state is None:
+            state = self.init_state(input_ids, inputs_embeds)
+        out, new_shift, new_wkv = self.model(idx=input_ids, embs=inputs_embeds, last_shift_states=state[0], last_wkv_states=state[1])
+        return  Munch(
+                    logits=out,
+                    state=(new_shift, new_wkv)
+                )
         
 class RWKV_v5_tiny(torch.nn.Module):
     def __init__(self, **args):
@@ -80,6 +133,7 @@ class RWKV_v5_tiny(torch.nn.Module):
 class RWKV_v6(RWKVModel):
     def __init__(self, *args, **kwargs):
         super().__init__()
+
         self.model = RWKV6(*args, **kwargs)
         self.config = Munch(
             n_embd=self.model.n_embd,

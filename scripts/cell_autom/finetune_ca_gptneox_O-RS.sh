@@ -42,7 +42,7 @@ MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}
 
 
 
-for N in 10
+for N in 8
 do
 
 
@@ -110,12 +110,13 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --show_valid_examples 5 \
         --early_stopping_patience 30 \
         --seed $(($N+42*$j)) \
-        --clip_grad_value 0.5 \
+        --clip_grad_value 0.1 \
         --save_best \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
         --freeze_mem \
-        --predict_from_mask
+        --learn_rule
+        # --validate_only
         # --act_on \
         # --max_hop $MAX_HOP \
         # --time_penalty 3e-4 \
