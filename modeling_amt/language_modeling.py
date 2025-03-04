@@ -429,8 +429,8 @@ class AssociativeMemoryCell(torch.nn.Module):
         
         if zero_mem:
             self.zero_mem()
-
         seg_kwargs = self.process_input(input_ids, **kwargs)
+
         if self.RWKV_ARMT and not self.layers[0].generate_mode:
             input1 = dict()
             input2 = dict()
@@ -499,9 +499,14 @@ class AssociativeMemoryCell(torch.nn.Module):
             return attention_mask
         else:
             shape = list(attention_mask.shape)
-            shape[1] += self.num_mem_tokens + use_sink
-            mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
-            mask[:, int(use_sink):-self.num_mem_tokens] = attention_mask
+            shape[-1] += self.num_mem_tokens + use_sink
+            if len(shape) == 4:
+                shape[-2] += self.num_mem_tokens + use_sink
+                mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
+                mask[..., int(use_sink):-self.num_mem_tokens, int(use_sink):-self.num_mem_tokens] = attention_mask
+            else: 
+                mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
+                mask[..., int(use_sink):-self.num_mem_tokens] = attention_mask
             return mask
     
     def process_output(self, model_outputs, labels, labels_mask, **kwargs):
@@ -560,7 +565,20 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
 
     def gradient_checkpointing_enable(self, *args, **kwargs):
         self.memory_cell.model.gradient_checkpointing_enable(*args, **kwargs)
-        
+    
+    def attn_mask_to_4d(self, attn_mask, upper):
+        if attn_mask is None:
+            return None
+        seg_len = attn_mask.size(-1)
+        if upper:
+            tri = torch.triu(torch.ones(seg_len, seg_len))
+        else:
+            tri = torch.tril(torch.ones(seg_len, seg_len))
+
+        mask = torch.einsum('bj,ij->bij', attn_mask, tri.to(attn_mask.device))
+        mask = mask.unsqueeze(1)
+        return mask
+
     def forward(self, 
                 input_ids, 
                 labels=None, 
@@ -604,13 +622,15 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             segment['zero_mem'] = False
             if state is not None:
                 segment['state'] = state
+            if sliding_window or attend_to_previous_input:
+                segment['attention_mask'] = self.attn_mask_to_4d(segment['attention_mask'], upper=False)
             
-            
+            # print("******", segment['attention_mask'].shape, "******")
             cell_out = self.memory_cell(**segment)
             if 'state' in cell_out:
                 state = cell_out['state']
             if sliding_window or attend_to_previous_input:
-                prev_attn_mask = segment['attention_mask'] * torch.triu(torch.ones_like(segment['attention_mask']))
+                prev_attn_mask = self.attn_mask_to_4d(prev_attn_mask, upper=True)
             if sliding_window:
                 past_key_values = [
                     [

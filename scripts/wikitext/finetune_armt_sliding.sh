@@ -11,7 +11,7 @@ CUDA_LAUNCH_BLOCKING=1
 MODEL_TYPE=decoder
 MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
 RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
-BACKBONE_CLS=transformers:AutoModelForCausalLM
+BACKBONE_CLS=base_models.modeling_gpt2:GPT2LMHeadModel
 TASK_NAME=wikitext-103-v1
 
 ITERS=36000
@@ -104,7 +104,8 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --d_mem $D_MEM \
         --n_heads $N_HEADS \
         --layers_attr transformer.h \
-        --prev_seg_kv
+        --prev_seg_kv \
+        --use_sink
 done
 done
 done
