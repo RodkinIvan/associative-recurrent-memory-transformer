@@ -479,7 +479,8 @@ class AssociativeMemoryCell(torch.nn.Module):
         if kwargs.get('attention_mask') is not None:
             seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], use_sink=self.use_sink)
             if kwargs.get('prev_attn_mask') is not None:
-                seg_kwargs['attention_mask'] = torch.cat([kwargs['prev_attn_mask'], seg_kwargs['attention_mask']], dim=-1)
+                prev_seg_attn_mask = self.pad_prev_seg_attn_mask(kwargs['prev_attn_mask'], use_sink=self.use_sink)
+                seg_kwargs['attention_mask'] = torch.cat([prev_seg_attn_mask, seg_kwargs['attention_mask']], dim=-1)
             if 'prev_attn_mask' in seg_kwargs:
                 seg_kwargs.pop('prev_attn_mask')
         seg_kwargs['output_hidden_states'] = True
@@ -499,14 +500,28 @@ class AssociativeMemoryCell(torch.nn.Module):
             return attention_mask
         else:
             shape = list(attention_mask.shape)
-            shape[-1] += self.num_mem_tokens + use_sink
             if len(shape) == 4:
+
+                shape[-1] += self.num_mem_tokens + use_sink
                 shape[-2] += self.num_mem_tokens + use_sink
                 mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens, int(use_sink):-self.num_mem_tokens] = attention_mask
             else: 
+                shape[-1] += self.num_mem_tokens + use_sink
                 mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens] = attention_mask
+            return mask
+    def pad_prev_seg_attn_mask(self, prev_seg_attn_mask, use_sink):
+        if self.num_mem_tokens in {0, None}:
+            return prev_seg_attn_mask
+        else:
+            shape = list(prev_seg_attn_mask.shape)
+            if len(shape) == 4:
+                shape[-2] += self.num_mem_tokens + use_sink
+                mask = torch.ones(*shape, dtype=torch.int64).to(prev_seg_attn_mask.device)
+                mask[..., int(use_sink):-self.num_mem_tokens, :] = prev_seg_attn_mask
+            else: 
+                mask = prev_seg_attn_mask
             return mask
     
     def process_output(self, model_outputs, labels, labels_mask, **kwargs):
@@ -620,17 +635,19 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             segment['past_key_values'] = past_key_values
             segment['prev_attn_mask'] = prev_attn_mask
             segment['zero_mem'] = False
+            attn_mask = segment['attention_mask']
             if state is not None:
                 segment['state'] = state
             if sliding_window or attend_to_previous_input:
-                segment['attention_mask'] = self.attn_mask_to_4d(segment['attention_mask'], upper=False)
+                segment['attention_mask'] = self.attn_mask_to_4d(attn_mask, upper=False)
             
-            # print("******", segment['attention_mask'].shape, "******")
+
+            assert segment.get('prev_attn_mask') is not None or seg_num == 0
             cell_out = self.memory_cell(**segment)
             if 'state' in cell_out:
                 state = cell_out['state']
             if sliding_window or attend_to_previous_input:
-                prev_attn_mask = self.attn_mask_to_4d(prev_attn_mask, upper=True)
+                prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True)
             if sliding_window:
                 past_key_values = [
                     [
