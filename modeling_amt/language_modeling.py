@@ -520,6 +520,8 @@ class AssociativeMemoryCell(torch.nn.Module):
                 shape[-2] += self.num_mem_tokens + use_sink
                 mask = torch.ones(*shape, dtype=torch.int64).to(prev_seg_attn_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens, :] = prev_seg_attn_mask
+                if use_sink:
+                    mask[..., 0, :] = 0
             else: 
                 mask = prev_seg_attn_mask
             return mask
