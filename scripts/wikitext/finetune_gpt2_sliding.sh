@@ -19,18 +19,18 @@ TBS=32
 
 MAX_N_SEGMENTSS=(8)
 MAX_VAL_SEGMENTSS=(16)
-MEMORY_SIZES=(16)
+MEMORY_SIZES=(1)
 INPUT_TOKENS=128
 LRS=(1e-4)
 MODEL=irodkin/gpt2-wiki103
 BSS=(4)
 
-D_MEM=96
+D_MEM=1
 N_HEADS=1
 
 
 
-for N in 4
+for N in 14
 do
 
 for MODEL_NAME in $MODEL
@@ -105,7 +105,8 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --n_heads $N_HEADS \
         --layers_attr transformer.h \
         --prev_seg_kv \
-        --use_sink
+        --use_sink \
+        --freeze_mem
 done
 done
 done

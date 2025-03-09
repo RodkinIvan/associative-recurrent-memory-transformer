@@ -153,6 +153,9 @@ parser.add_argument('--report_to', type=str, default='wandb', help='')
 parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
 parser.add_argument('--layers_attr', type=str, default=None, help='attribute of model, which contains layers')
 
+parser.add_argument('--freeze_mem', action='store_true', default=False,
+                    help='Freeze memory parameters in ARMT')
+
 if __name__ == '__main__':
     args = parser.parse_args()
     # set current working dir
@@ -466,6 +469,9 @@ if __name__ == '__main__':
         
         if args.use_sink:
             mem_cell_args['use_sink'] = args.use_sink
+
+        if args.freeze_mem is not None:
+            mem_cell_args['freeze_mem'] = args.freeze_mem
 
         cell = memory_cell_cls(**mem_cell_args)
         model = recurrent_wrapper_cls(cell, 
