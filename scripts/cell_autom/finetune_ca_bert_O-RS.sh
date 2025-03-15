@@ -21,7 +21,7 @@ TBS=256
 MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
 SHIFTS=(3)
-LRS=(3e-4)
+LRS=(1e-4)
 BSS=(256)
 
 MEMORY_SIZE=1
@@ -34,9 +34,10 @@ MAX_HOP=4
 
 DIM=512
 NUM_LAYERS=4
+N_ATTN_HEADS=8
 
 
-MODEL_CFG=./base_models/configs/bert_configs/bert_${NUM_LAYERS}L_D${DIM}_H${NUM_LAYERS}.json
+MODEL_CFG=./base_models/configs/bert_configs/bert_${NUM_LAYERS}L_D${DIM}_H${N_ATTN_HEADS}.json
 
 
 
