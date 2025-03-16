@@ -510,7 +510,8 @@ class AssociativeMemoryCell(torch.nn.Module):
                 shape[-1] += self.num_mem_tokens + use_sink
                 mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens] = attention_mask
-            return mask.bool()
+            return mask.float()
+
     def pad_prev_seg_attn_mask(self, prev_seg_attn_mask, use_sink):
         if self.num_mem_tokens in {0, None}:
             return prev_seg_attn_mask
@@ -524,7 +525,7 @@ class AssociativeMemoryCell(torch.nn.Module):
                     mask[..., 0, :] = 0
             else: 
                 mask = prev_seg_attn_mask
-            return mask.bool()
+            return mask.float()
     
     def process_output(self, model_outputs, labels, labels_mask, **kwargs):
         
