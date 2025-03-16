@@ -477,9 +477,9 @@ class AssociativeMemoryCell(torch.nn.Module):
         seg_kwargs['input_ids'] = None
         seg_kwargs['inputs_embeds'] = inputs_embeds
         if kwargs.get('attention_mask') is not None:
-            seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], use_sink=self.use_sink)
+            seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], use_sink=self.use_sink, dtype=inputs_embeds.dtype)
             if kwargs.get('prev_attn_mask') is not None:
-                prev_seg_attn_mask = self.pad_prev_seg_attn_mask(kwargs['prev_attn_mask'], use_sink=self.use_sink)
+                prev_seg_attn_mask = self.pad_prev_seg_attn_mask(kwargs['prev_attn_mask'], use_sink=self.use_sink, dtype=inputs_embeds.dtype)
                 seg_kwargs['attention_mask'] = torch.cat([prev_seg_attn_mask, seg_kwargs['attention_mask']], dim=-1)
             if 'prev_attn_mask' in seg_kwargs:
                 seg_kwargs.pop('prev_attn_mask')
@@ -495,7 +495,7 @@ class AssociativeMemoryCell(torch.nn.Module):
             ]).long().unsqueeze(0)
         return seg_kwargs
     
-    def pad_attention_mask(self, attention_mask, use_sink=False):
+    def pad_attention_mask(self, attention_mask, use_sink=False, dtype=float):
         if self.num_mem_tokens in {0, None}:
             return attention_mask
         else:
@@ -510,9 +510,9 @@ class AssociativeMemoryCell(torch.nn.Module):
                 shape[-1] += self.num_mem_tokens + use_sink
                 mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens] = attention_mask
-            return mask.float()
+            return mask.to(dtype)
 
-    def pad_prev_seg_attn_mask(self, prev_seg_attn_mask, use_sink):
+    def pad_prev_seg_attn_mask(self, prev_seg_attn_mask, use_sink, dtype=float):
         if self.num_mem_tokens in {0, None}:
             return prev_seg_attn_mask
         else:
@@ -525,7 +525,7 @@ class AssociativeMemoryCell(torch.nn.Module):
                     mask[..., 0, :] = 0
             else: 
                 mask = prev_seg_attn_mask
-            return mask.float()
+            return mask.to(dtype)
     
     def process_output(self, model_outputs, labels, labels_mask, **kwargs):
         
@@ -653,12 +653,26 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                 prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True)
             if sliding_window:
                 past_key_values = [
-                    [
-                        k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
-                        for k_or_v in seg_kv
+                        [
+                            k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
+                            for k_or_v in seg_kv
+                        ]
+                        for seg_kv in cell_out['past_key_values']
                     ]
-                    for seg_kv in cell_out['past_key_values']
-                ]
+                if not isinstance(cell_out['past_key_values'], tuple) and not isinstance(cell_out['past_key_values'], list):
+                    past_key_values = cell_out['past_key_values'].from_legacy_cache(past_key_values)
+                    # for i in range(len(past_key_values)):
+                    #     length = past_key_values[i][0].size(-2)
+                    #     k = past_key_values[i][0][..., -(num_mem_tokens+seg_len):length-num_mem_tokens, :].detach() 
+                    #     v = past_key_values[i][1][..., -(num_mem_tokens+seg_len):length-num_mem_tokens, :].detach() 
+                    #     past_key_values.update(k, v, i)
+                # past_key_values = [
+                #     [
+                #         k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
+                #         for k_or_v in seg_kv
+                #     ]
+                #     for seg_kv in cell_out['past_key_values']
+                # ]
             if (not output_only_last_segment) or (seg_num == len(segmented) - 1):
                 cell_outputs.append(cell_out)
 

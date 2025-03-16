@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
+# export WANDB_PROJECT=t5-experiments
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 set -e
 cd ../..
-WANDB_PROJECT=t5-experiments
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
@@ -21,7 +21,7 @@ MAX_N_SEGMENTSS=(8)
 MAX_VAL_SEGMENTSS=(16)
 MEMORY_SIZES=(16)
 INPUT_TOKENS=128
-LRS=(1e-4)
+LRS=(1e-5)
 MODEL=meta-llama/Llama-3.2-1B
 BSS=(1)
 
@@ -50,6 +50,9 @@ VAL_SEQ_LEN=$(((INPUT_SIZE)*MAX_VAL_SEGMENTS))
 ALPHA=${ALPHAS[j]}
 
 BS=${BSS[j]}
+
+GRAD_ACC_STEPS=$(($TBS/$BS/$NP))
+
 K2=8
 for SEGMENT_ORDERING in regular
 do
@@ -67,10 +70,21 @@ then
 else
     MODEL_CPT=None
 fi
+# cd accel_configs/
+# python create_config.py \
+#         --bf16 \
+#         --train_batch_size $TBS\
+#         --train_micro_batch_size_per_gpu $BS\
+#         --gradient_accumulation_steps $GRAD_ACC_STEPS\
+#         --np $NP\
+#         --gradient_clipping 1.0
+# cd ..
+# ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml
+ACCEL_CONFIG=./accel_configs/accelerate_bf16.yaml
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MODEL_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $(($N + 29500)) run_finetuning_lm_rmt_distil.py \
+accelerate launch --num_processes $NP --config_file  $ACCEL_CONFIG --mixed_precision bf16 --main_process_port $(($N + 29500)) run_finetuning_lm_rmt_distil.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_alpha${ALPHA}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
         --from_pretrained $MODEL_NAME \
@@ -88,7 +102,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --max_n_segments $MAX_N_SEGMENTS\
         --max_val_segments $MAX_VAL_SEGMENTS\
         --batch_size $BS \
-        --gradient_accumulation_steps $(($TBS/$BS/$NP)) \
+        --gradient_accumulation_steps $GRAD_ACC_STEPS \
         --iters $ITERS \
         --k1 -1 --k2 $K2 \
         --optimizer AdamW  --weight_decay 0.01 \
@@ -98,9 +112,8 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --show_valid_examples 5 \
         --early_stopping_patience 15 \
         --seed $(($N+42*$j)) \
-        --clip_grad_value 5.0 \
+        --clip_grad_norm 1.0 \
         --save_best \
-        --tokenizer gpt2 \
         --d_mem $D_MEM \
         --n_heads $N_HEADS \
         --layers_attr model.layers \

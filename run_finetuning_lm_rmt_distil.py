@@ -215,7 +215,7 @@ if __name__ == '__main__':
             raw_datasets = datasets.load_dataset('Salesforce/wikitext', args.task_name)
 
             # should it really be like this?
-            if 'wikitext-2' not in args.task_name:
+            if 'wikitext-2' not in args.task_name and tokenizer.unk_token is not None:
                 raw_datasets = raw_datasets.map(process_unk)
             column_names = raw_datasets["train"].column_names
             text_column_name = "text" if "text" in column_names else column_names[0]
