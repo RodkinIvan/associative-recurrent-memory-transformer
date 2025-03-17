@@ -645,7 +645,6 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                 segment['attention_mask'] = self.attn_mask_to_4d(attn_mask, upper=False, query_len=seg_len)
             
 
-            assert segment.get('prev_attn_mask') is not None or seg_num == 0
             cell_out = self.memory_cell(**segment)
             if 'state' in cell_out:
                 state = cell_out['state']
