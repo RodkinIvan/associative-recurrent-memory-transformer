@@ -3,7 +3,7 @@ export CUDA_VISIBLE_DEVICES=1
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 set -e
 cd ../..
-WANDB_PROJECT=t5-experiments
+export WANDB_PROJECT=t5-experiments
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
