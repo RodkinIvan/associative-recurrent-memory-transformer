@@ -489,12 +489,12 @@ if __name__ == '__main__':
 
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':
-            if 'rwkv' not in args.model_cpt:
+            try:
                 model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
                 cpt = torch.load(model_cpt, map_location='cpu')
                 model.load_state_dict(cpt)
                 logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
-            else:
+            except Exception as e:
                 import safetensors
                 model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
                 cpt = safetensors.torch.load_file(model_cpt)
@@ -651,11 +651,31 @@ if __name__ == '__main__':
         trainer.save_metrics(save_path=args.model_path)
     else:
         # run validation, do not write to tensorboard
-        logger.info('Running validation on train set:')
-        trainer.validate(train_dataloader, split='train', write_tb=True)
+        # logger.info('Running validation on train set:')
+        # trainer.validate(train_dataloader, split='train', write_tb=True)
         if valid_dataloader is not None:
-            logger.info('Running validation on valid data:')
-            trainer.validate(valid_dataloader, write_tb=False, split='valid')
+            logger.info('Runnning validation on valid data:')
+            metrics = trainer.validate(valid_dataloader, write_tb=False, split='valid')
+            evaluated_on = []
+            metric_on = []
+            for i in range(args.max_val_segments):
+                if f'ce_loss_{i}' in metrics:
+                    evaluated_on.append(i)
+                    metric_on.append(metrics[f'ce_loss_{i}'])
+            if args.report_to == 'wandb' and accelerator.is_main_process:
+                table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'valid/ce_loss'])
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
+                trainer.run.log({'per_segment_eval': line})
         if test_dataloader is not None:
             logger.info('Runnning validation on test data:')
-            trainer.validate(test_dataloader, write_tb=False, split='test')
+            metrics = trainer.validate(test_dataloader, write_tb=False, split='test')
+            evaluated_on = []
+            metric_on = []
+            for i in range(args.max_val_segments):
+                if f'ce_loss_{i}' in metrics:
+                    evaluated_on.append(i)
+                    metric_on.append(metrics[f'ce_loss_{i}'])
+            if args.report_to == 'wandb' and accelerator.is_main_process:
+                table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'test/ce_loss'])
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
+                trainer.run.log({'per_segment_test': line})
