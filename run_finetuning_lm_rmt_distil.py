@@ -633,7 +633,7 @@ if __name__ == '__main__':
                     metric_on.append(metrics[f'ce_loss_{i}'])
             if args.report_to == 'wandb' and accelerator.is_main_process:
                 table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'valid/ce_loss'])
-                line = trainer.run.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
                 trainer.run.log({'per_segment_eval': line})
         if test_dataloader is not None:
             logger.info('Runnning validation on test data:')
@@ -646,7 +646,7 @@ if __name__ == '__main__':
                     metric_on.append(metrics[f'ce_loss_{i}'])
             if args.report_to == 'wandb' and accelerator.is_main_process:
                 table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'test/ce_loss'])
-                line = trainer.run.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
                 trainer.run.log({'per_segment_test': line})
         trainer.save_metrics(save_path=args.model_path)
     else:
