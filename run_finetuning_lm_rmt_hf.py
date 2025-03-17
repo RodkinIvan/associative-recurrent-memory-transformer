@@ -118,6 +118,9 @@ parser.add_argument('--lora_dropout', type=float, default=0.1, help='')
 parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
 parser.add_argument('--layers_attr', type=str, default=None, help='attribute of model, which contains layers')
 
+parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
+parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
+
 os.environ['HF_Trainer'] = '1'
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -283,13 +286,16 @@ if __name__ == '__main__':
         if args.attend_to_previous_input:
             mem_cell_args['attend_to_previous_input'] = args.attend_to_previous_input
 
+        if args.use_sink:
+            mem_cell_args['use_sink'] = args.use_sink
         cell = memory_cell_cls(**mem_cell_args)
         model = recurrent_wrapper_cls(cell, 
                                       segment_size=segment_size,
                                       max_n_segments=args.max_n_segments, 
                                       vary_n_segments=args.vary_n_segments,
                                       k2=args.k2,
-                                      attend_to_previous_input=args.attend_to_previous_input
+                                      attend_to_previous_input=args.attend_to_previous_input,
+                                      sliding_window=args.prev_seg_kv
         )
                                     
 
