@@ -584,14 +584,14 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
     def gradient_checkpointing_enable(self, *args, **kwargs):
         self.memory_cell.model.gradient_checkpointing_enable(*args, **kwargs)
     
-    def attn_mask_to_4d(self, attn_mask, upper):
+    def attn_mask_to_4d(self, attn_mask, upper, query_len):
         if attn_mask is None:
             return None
         seg_len = attn_mask.size(-1)
         if upper:
-            tri = torch.triu(torch.ones(seg_len, seg_len))
+            tri = torch.triu(torch.ones(query_len, seg_len))
         else:
-            tri = torch.tril(torch.ones(seg_len, seg_len))
+            tri = torch.tril(torch.ones(query_len, seg_len))
 
         mask = torch.einsum('bj,ij->bij', attn_mask, tri.to(attn_mask.device))
         mask = mask.unsqueeze(1)
@@ -642,15 +642,16 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             if state is not None:
                 segment['state'] = state
             if sliding_window or attend_to_previous_input:
-                segment['attention_mask'] = self.attn_mask_to_4d(attn_mask, upper=False)
+                segment['attention_mask'] = self.attn_mask_to_4d(attn_mask, upper=False, query_len=seg_len)
             
 
             assert segment.get('prev_attn_mask') is not None or seg_num == 0
             cell_out = self.memory_cell(**segment)
             if 'state' in cell_out:
                 state = cell_out['state']
-            if sliding_window or attend_to_previous_input:
-                prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True)
+            if (sliding_window or attend_to_previous_input) and seg_num + 1 != len(segmented):
+                next_seg_len = segmented[seg_num+1]['input_ids'].size(-1)
+                prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True, query_len=next_seg_len)
             if sliding_window:
                 past_key_values = [
                         [
