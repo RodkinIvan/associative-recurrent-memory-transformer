@@ -653,12 +653,12 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                 prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True, query_len=next_seg_len)
             if sliding_window:
                 past_key_values = [
-                        [
-                            k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
-                            for k_or_v in seg_kv
-                        ]
-                        for seg_kv in cell_out['past_key_values']
+                    [
+                        k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
+                        for k_or_v in seg_kv
                     ]
+                    for seg_kv in cell_out['past_key_values']
+                ]
                 if not isinstance(cell_out['past_key_values'], tuple) and not isinstance(cell_out['past_key_values'], list):
                     past_key_values = cell_out['past_key_values'].from_legacy_cache(past_key_values)
                     # for i in range(len(past_key_values)):
