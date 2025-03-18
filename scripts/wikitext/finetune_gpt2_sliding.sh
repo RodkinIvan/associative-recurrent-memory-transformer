@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export NOT_INVERT_ATTN_MASK=1
 export CUDA_VISIBLE_DEVICES=1
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 set -e

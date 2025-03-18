@@ -494,7 +494,12 @@ class AssociativeMemoryCell(torch.nn.Module):
                 write_pos
             ]).long().unsqueeze(0)
         return seg_kwargs
-    
+
+    def convert_to_infinity_attn_mask(self, attn_mask, dtype):
+        min_dtype = torch.finfo(dtype).min
+        new_mask = (1.0 - attn_mask) * min_dtype
+        return new_mask
+
     def pad_attention_mask(self, attention_mask, use_sink=False, dtype=float):
         if self.num_mem_tokens in {0, None}:
             return attention_mask
@@ -504,11 +509,17 @@ class AssociativeMemoryCell(torch.nn.Module):
 
                 shape[-1] += self.num_mem_tokens + use_sink
                 shape[-2] += self.num_mem_tokens + use_sink
-                mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
+                mask = torch.ones(*shape, dtype=dtype).to(attention_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens, int(use_sink):-self.num_mem_tokens] = attention_mask
+                if use_sink:
+                    mask[..., 0, 1:] = 0
+                mask[..., :-self.num_mem_tokens, -self.num_mem_tokens:] = 0
+                # mask = torch.tril(mask)
+                if not os.environ.get("NOT_INVERT_ATTN_MASK"):
+                    mask = self.convert_to_infinity_attn_mask(mask, dtype)
             else: 
                 shape[-1] += self.num_mem_tokens + use_sink
-                mask = torch.ones(*shape, dtype=torch.int64).to(attention_mask.device)
+                mask = torch.ones(*shape, dtype=dtype).to(attention_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens] = attention_mask
             return mask.to(dtype)
 
@@ -519,10 +530,12 @@ class AssociativeMemoryCell(torch.nn.Module):
             shape = list(prev_seg_attn_mask.shape)
             if len(shape) == 4:
                 shape[-2] += self.num_mem_tokens + use_sink
-                mask = torch.ones(*shape, dtype=torch.int64).to(prev_seg_attn_mask.device)
+                mask = torch.ones(*shape, dtype=dtype).to(prev_seg_attn_mask.device)
                 mask[..., int(use_sink):-self.num_mem_tokens, :] = prev_seg_attn_mask
                 if use_sink:
                     mask[..., 0, :] = 0
+                if not os.environ.get("NOT_INVERT_ATTN_MASK"):
+                    mask = self.convert_to_infinity_attn_mask(mask, dtype)
             else: 
                 mask = prev_seg_attn_mask
             return mask.to(dtype)
