@@ -2,6 +2,7 @@ import math
 import torch
 from torch.nn import CrossEntropyLoss
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
+from transformers.cache_utils import Cache, DynamicCache
 from torch.nn.functional import relu as r
 import torch.nn.functional as F
 import wandb
@@ -116,7 +117,7 @@ class AssociativeLayerWrapper(torch.nn.Module):
                 # self.ln(
                     hidden_states
                 # )
-            )+ hidden_states
+            ) + hidden_states
         out = self.layer(hidden_states, *args, **kwargs)
         if not self.generate_mode:
             mem_tokens = out[0][:, -self.num_mem_tokens:]
@@ -131,7 +132,7 @@ class AssociativeLayerWrapper(torch.nn.Module):
                 # self.ln(
                     hidden_states
                 # )
-            )+ hidden_states
+            ) + hidden_states
         out = self.layer(hidden_states, *args, **kwargs)
         return out
 
@@ -586,6 +587,53 @@ class AssociativeMemoryCell(torch.nn.Module):
         self.generate_mode(False)
         return out
     
+    def update_past_key_values_sw(self, past_key_values, window_size):
+        past_key_values = past_key_values.to_legacy_cache()
+        past_key_values = [
+            [
+                k_or_v[..., -window_size:, :].detach() 
+                for k_or_v in seg_kv
+            ]
+            for seg_kv in past_key_values
+        ]
+        past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+        return past_key_values
+    
+    def greedy_generate_sw(self, input_ids, attention_mask, **generate_kwargs):
+        window_size = generate_kwargs['window_size']
+        max_new_tokens = generate_kwargs['max_new_tokens']
+        past_key_values = self.update_past_key_values_sw(generate_kwargs['past_key_values'], window_size)
+        eos_token_id = generate_kwargs['eos_token_id']
+        
+        generated_ids = None
+
+        for i in range(input_ids.size(-1) + max_new_tokens):
+            
+            if i < input_ids.size(-1):
+                next_token_id = input_ids[..., i:i+1]
+            else:
+                next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+            
+            if generated_ids is not None and i > input_ids.size(-1):
+                generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
+            else:
+                generated_ids = next_token_id
+            next_input = next_token_id
+            attention_mask = torch.cat([attention_mask, torch.ones_like(next_token_id)], dim=-1)
+            with torch.no_grad():
+                outputs = self.model(
+                    input_ids=next_input,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    use_cache=True
+                )
+                past_key_values = self.update_past_key_values_sw(outputs.past_key_values, window_size)
+                next_token_logits = outputs.logits[:, -1, :]
+                if (next_token_id[:, 0] == eos_token_id).all():
+                    break
+        return generated_ids
+            
+
 
 class AssociativeRecurrentWrapper(torch.nn.Module):
     def __init__(self, memory_cell, **rmt_kwargs):
@@ -610,6 +658,52 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         mask = mask.unsqueeze(1)
         return mask
 
+    def process_segment(self, segment_kwargs, next_seg_len=None):
+        sliding_window = self.rmt_config['sliding_window'] if 'sliding_window' in self.rmt_config else False
+        attend_to_previous_input = self.rmt_config['attend_to_previous_input'] if 'attend_to_previous_input' in self.rmt_config else False
+        attn_mask = segment_kwargs['attention_mask']
+        seg_len = segment_kwargs['input_ids'].size(-1)
+
+        segment_kwargs['use_cache'] = sliding_window
+        if segment_kwargs.get('past_key_values') is None:
+            segment_kwargs['past_key_values'] = None
+        if segment_kwargs.get('prev_attn_mask') is None:
+            segment_kwargs['prev_attn_mask'] = None
+        segment_kwargs['zero_mem'] = False
+        if sliding_window or attend_to_previous_input:
+            segment_kwargs['attention_mask'] = self.attn_mask_to_4d(attn_mask, upper=False, query_len=seg_len)
+        
+        
+        num_mem_tokens = self.memory_cell.num_mem_tokens
+        cell_out = self.memory_cell(**segment_kwargs)
+        state = cell_out.get('state')
+        if (sliding_window or attend_to_previous_input) and next_seg_len is not None:
+            prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True, query_len=next_seg_len)
+        else: 
+            prev_attn_mask = None
+        if sliding_window:
+            past_key_values = [
+                [
+                    k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
+                    for k_or_v in seg_kv
+                ]
+                for seg_kv in cell_out['past_key_values']
+            ]
+            if not isinstance(cell_out['past_key_values'], tuple) and not isinstance(cell_out['past_key_values'], list):
+                past_key_values = cell_out['past_key_values'].from_legacy_cache(past_key_values)
+            else:
+                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+        else: 
+            past_key_values = None
+        next_segment_kwargs = dict()
+        next_segment_kwargs['use_cache'] = sliding_window
+        next_segment_kwargs['past_key_values'] = past_key_values
+        next_segment_kwargs['prev_attn_mask'] = prev_attn_mask
+        next_segment_kwargs['zero_mem'] = False
+        if state is not None:
+            next_segment_kwargs['state'] = state
+        return cell_out, next_segment_kwargs
+    
     def forward(self, 
                 input_ids, 
                 labels=None, 
@@ -621,9 +715,6 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                 input_segmented=False,
                 output_only_last_segment=False,
                 ):
-        
-        sliding_window = self.rmt_config['sliding_window'] if 'sliding_window' in self.rmt_config else False
-        attend_to_previous_input = self.rmt_config['attend_to_previous_input'] if 'attend_to_previous_input' in self.rmt_config else False
         if input_segmented:
             n_segs = input_ids.shape[1] if not (input_ids is None) else inputs_embeds.shape[1]
             segmented = [dict(
@@ -640,52 +731,14 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             segmented = self.segment(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels, labels_mask=labels_mask)
         
         cell_outputs = []
-        past_key_values = None
-        num_mem_tokens = self.memory_cell.num_mem_tokens
-        prev_attn_mask = None
         self.memory_cell.zero_mem()
-        state = None
+        next_seg_kwargs = dict()
         for seg_num, segment in enumerate(segmented):
-            seg_len = segment['input_ids'].size(-1)
-            segment['use_cache'] = sliding_window
-            segment['past_key_values'] = past_key_values
-            segment['prev_attn_mask'] = prev_attn_mask
-            segment['zero_mem'] = False
-            attn_mask = segment['attention_mask']
-            if state is not None:
-                segment['state'] = state
-            if sliding_window or attend_to_previous_input:
-                segment['attention_mask'] = self.attn_mask_to_4d(attn_mask, upper=False, query_len=seg_len)
-            
-
-            cell_out = self.memory_cell(**segment)
-            if 'state' in cell_out:
-                state = cell_out['state']
-            if (sliding_window or attend_to_previous_input) and seg_num + 1 != len(segmented):
-                next_seg_len = segmented[seg_num+1]['input_ids'].size(-1)
-                prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True, query_len=next_seg_len)
-            if sliding_window:
-                past_key_values = [
-                    [
-                        k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
-                        for k_or_v in seg_kv
-                    ]
-                    for seg_kv in cell_out['past_key_values']
-                ]
-                if not isinstance(cell_out['past_key_values'], tuple) and not isinstance(cell_out['past_key_values'], list):
-                    past_key_values = cell_out['past_key_values'].from_legacy_cache(past_key_values)
-                    # for i in range(len(past_key_values)):
-                    #     length = past_key_values[i][0].size(-2)
-                    #     k = past_key_values[i][0][..., -(num_mem_tokens+seg_len):length-num_mem_tokens, :].detach() 
-                    #     v = past_key_values[i][1][..., -(num_mem_tokens+seg_len):length-num_mem_tokens, :].detach() 
-                    #     past_key_values.update(k, v, i)
-                # past_key_values = [
-                #     [
-                #         k_or_v[..., -(num_mem_tokens+seg_len):k_or_v.size(-2)-num_mem_tokens, :].detach() 
-                #         for k_or_v in seg_kv
-                #     ]
-                #     for seg_kv in cell_out['past_key_values']
-                # ]
+            if seg_num != len(segmented) - 1:
+                next_seg_len = segmented[seg_num + 1]['input_ids'].size(-1)
+            else:
+                next_seg_len = None
+            cell_out, next_seg_kwargs = self.process_segment(dict(**segment, **next_seg_kwargs), next_seg_len=next_seg_len)
             if (not output_only_last_segment) or (seg_num == len(segmented) - 1):
                 cell_outputs.append(cell_out)
 
@@ -795,11 +848,21 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
     def generate(self, input_ids, attention_mask, **generate_kwargs):
         self.memory_cell.zero_mem()
         segmented = self.segment(input_ids=input_ids, attention_mask=attention_mask)
-
+        next_seg_kwargs = dict()
         for seg_num, segment in enumerate(segmented[:-1]):
-            cell_out = self.memory_cell(**segment, output_hidden_states=True, zero_mem=False)
+            next_seg_len = segmented[seg_num + 1]['input_ids'].size(-1)
+            _, next_seg_kwargs = self.process_segment(dict(**segment, **next_seg_kwargs), next_seg_len=next_seg_len)
 
         final_segment = segmented[-1]
-        out = self.memory_cell.generate(**final_segment, zero_mem=False, **generate_kwargs)
-        self.memory_cell.zero_mem()
-        return out
+        assert next_seg_kwargs.get('past_key_values') is None or isinstance(next_seg_kwargs.get('past_key_values'), Cache), "Sliding Window generation is not implemented for legacy cache"
+        if next_seg_kwargs.get('past_key_values') is not None:
+            legacy_cache = next_seg_kwargs['past_key_values'].to_legacy_cache()
+            seg_len = segmented[-2]['input_ids'].size(-1)
+            cache = DynamicCache().from_legacy_cache(legacy_cache)
+            generate_kwargs['past_key_values'] = cache
+            generate_kwargs['window_size'] = seg_len
+            out = self.memory_cell.greedy_generate_sw(**final_segment, **generate_kwargs)
+            return out
+        else:
+            out = self.memory_cell.generate(**final_segment, **generate_kwargs)
+            return out

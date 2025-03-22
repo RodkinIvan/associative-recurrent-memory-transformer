@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-export NOT_INVERT_ATTN_MASK=1
 export CUDA_VISIBLE_DEVICES=0
+
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 set -e
 cd ../..
 # WANDB_PROJECT=t5-experiments
+
+export NOT_INVERT_ATTN_MASK=1
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
