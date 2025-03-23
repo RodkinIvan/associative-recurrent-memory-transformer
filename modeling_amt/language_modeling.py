@@ -782,8 +782,8 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         full_logits = torch.cat([o.logits for o in cell_outputs], dim=1)
         
         labels = kwargs.get('labels')
-        labels = labels[:, -full_logits.size(1):]
         if labels is not None:
+            labels = labels[:, -full_logits.size(1):]
             shift_labels = labels[..., 1:].contiguous()
             shift_logits = full_logits[..., :-1, :].contiguous()
             flat_labels = shift_labels.view(-1)
@@ -791,8 +791,8 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             
             loss_fct = CrossEntropyLoss()
             labels_mask = kwargs.get('labels_mask')
-            labels_mask = labels_mask[:, -full_logits.size(1):]
             if labels_mask is not None:
+                labels_mask = labels_mask[:, -full_logits.size(1):]
                 shift_mask = labels_mask[..., :-1].contiguous()
 
                 flat_labels = flat_labels[shift_mask.view(-1)]
