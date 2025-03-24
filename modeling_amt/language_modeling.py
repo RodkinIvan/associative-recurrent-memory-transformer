@@ -599,13 +599,15 @@ class AssociativeMemoryCell(torch.nn.Module):
         past_key_values = DynamicCache.from_legacy_cache(past_key_values)
         return past_key_values
     
-    def greedy_generate_sw(self, input_ids, attention_mask, **generate_kwargs):
+    def greedy_generate_sw(self, input_ids, attention_mask, prev_attn_mask, **generate_kwargs):
         window_size = generate_kwargs['window_size']
         max_new_tokens = generate_kwargs['max_new_tokens']
         past_key_values = self.update_past_key_values_sw(generate_kwargs['past_key_values'], window_size)
         eos_token_id = generate_kwargs['eos_token_id']
         
         generated_ids = None
+
+        sw_attention_mask = prev_attn_mask[..., -window_size:]
 
         for i in range(input_ids.size(-1) + max_new_tokens):
             
@@ -619,11 +621,15 @@ class AssociativeMemoryCell(torch.nn.Module):
             else:
                 generated_ids = next_token_id
             next_input = next_token_id
-            attention_mask = torch.cat([attention_mask, torch.ones_like(next_token_id)], dim=-1)
+            
+            if i < input_ids.size(-1):
+                sw_attention_mask =  torch.cat([sw_attention_mask, attention_mask[..., i:i+1]], dim=-1)[..., -window_size+1:]
+            else:
+                sw_attention_mask = torch.cat([sw_attention_mask, torch.ones_like(next_token_id)], dim=-1)[..., -window_size+1:]
             with torch.no_grad():
                 outputs = self.model(
                     input_ids=next_input,
-                    attention_mask=attention_mask,
+                    attention_mask=sw_attention_mask,
                     past_key_values=past_key_values,
                     use_cache=True
                 )
@@ -852,15 +858,17 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         for seg_num, segment in enumerate(segmented[:-1]):
             next_seg_len = segmented[seg_num + 1]['input_ids'].size(-1)
             _, next_seg_kwargs = self.process_segment(dict(**segment, **next_seg_kwargs), next_seg_len=next_seg_len)
-
+        
         final_segment = segmented[-1]
         assert next_seg_kwargs.get('past_key_values') is None or isinstance(next_seg_kwargs.get('past_key_values'), Cache), "Sliding Window generation is not implemented for legacy cache"
         if next_seg_kwargs.get('past_key_values') is not None:
+            prev_attn_mask = segmented[-2]['attention_mask']
             legacy_cache = next_seg_kwargs['past_key_values'].to_legacy_cache()
             seg_len = segmented[-2]['input_ids'].size(-1)
             cache = DynamicCache().from_legacy_cache(legacy_cache)
             generate_kwargs['past_key_values'] = cache
             generate_kwargs['window_size'] = seg_len
+            final_segment['prev_attn_mask'] = prev_attn_mask
             out = self.memory_cell.greedy_generate_sw(**final_segment, **generate_kwargs)
             return out
         else:
