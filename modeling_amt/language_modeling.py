@@ -600,6 +600,7 @@ class AssociativeMemoryCell(torch.nn.Module):
         return past_key_values
     
     def greedy_generate_sw(self, input_ids, attention_mask, prev_attn_mask, **generate_kwargs):
+        self.generate_mode(True)
         window_size = generate_kwargs['window_size']
         max_new_tokens = generate_kwargs['max_new_tokens']
         past_key_values = self.update_past_key_values_sw(generate_kwargs['past_key_values'], window_size)
@@ -637,6 +638,7 @@ class AssociativeMemoryCell(torch.nn.Module):
                 next_token_logits = outputs.logits[:, -1, :]
                 if (next_token_id[:, 0] == eos_token_id).all():
                     break
+        self.generate_mode(False)
         return generated_ids
             
 
