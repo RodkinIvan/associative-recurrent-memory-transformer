@@ -636,7 +636,7 @@ class AssociativeMemoryCell(torch.nn.Module):
                 )
                 past_key_values = self.update_past_key_values_sw(outputs.past_key_values, window_size)
                 next_token_logits = outputs.logits[:, -1, :]
-                if (next_token_id[:, 0] == eos_token_id).all():
+                if (next_token_id[:, 0] == eos_token_id).all() and i >= input_ids.size(-1):
                     break
         self.generate_mode(False)
         return generated_ids
