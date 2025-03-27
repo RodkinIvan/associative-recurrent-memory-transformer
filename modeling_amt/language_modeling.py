@@ -29,6 +29,25 @@ class DPFP:
         x_rolled = torch.cat([x.roll(shifts=j, dims=-1) for j in range(1,nu+1)], dim=-1)
         x_repeat = torch.cat([x] * nu, dim=-1)
         return x_repeat * x_rolled
+def attn_mask_to_4d(attn_mask, upper, query_len):
+    if attn_mask is None:
+        return None
+    seg_len = attn_mask.size(-1)
+    if upper:
+        tri = torch.triu(torch.ones(query_len, seg_len))
+    else:
+        tri = torch.tril(torch.ones(query_len, seg_len))
+
+    mask = torch.einsum('bj,ij->bij', attn_mask, tri.to(attn_mask.device))
+    mask = mask.unsqueeze(1)
+    return mask
+
+def invert_attn_mask(attn_mask, dtype):
+        min_dtype = torch.finfo(dtype).min
+        new_mask = (1.0 - attn_mask) * min_dtype
+        return new_mask
+
+
 
 class AssociativeLayerWrapper(torch.nn.Module):
 
@@ -478,9 +497,9 @@ class AssociativeMemoryCell(torch.nn.Module):
         seg_kwargs['input_ids'] = None
         seg_kwargs['inputs_embeds'] = inputs_embeds
         if kwargs.get('attention_mask') is not None:
-            seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], use_sink=self.use_sink, dtype=inputs_embeds.dtype)
+            seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], dtype=inputs_embeds.dtype)
             if kwargs.get('prev_attn_mask') is not None:
-                prev_seg_attn_mask = self.pad_prev_seg_attn_mask(kwargs['prev_attn_mask'], use_sink=self.use_sink, dtype=inputs_embeds.dtype)
+                prev_seg_attn_mask = self.pad_prev_seg_attn_mask(kwargs['prev_attn_mask'], dtype=inputs_embeds.dtype)
                 seg_kwargs['attention_mask'] = torch.cat([prev_seg_attn_mask, seg_kwargs['attention_mask']], dim=-1)
             if 'prev_attn_mask' in seg_kwargs:
                 seg_kwargs.pop('prev_attn_mask')
@@ -496,47 +515,44 @@ class AssociativeMemoryCell(torch.nn.Module):
             ]).long().unsqueeze(0)
         return seg_kwargs
 
-    def convert_to_infinity_attn_mask(self, attn_mask, dtype):
-        min_dtype = torch.finfo(dtype).min
-        new_mask = (1.0 - attn_mask) * min_dtype
-        return new_mask
+    
 
-    def pad_attention_mask(self, attention_mask, use_sink=False, dtype=float):
+    def pad_attention_mask(self, attention_mask, dtype=float):
         if self.num_mem_tokens in {0, None}:
             return attention_mask
         else:
             shape = list(attention_mask.shape)
             if len(shape) == 4:
 
-                shape[-1] += self.num_mem_tokens + use_sink
-                shape[-2] += self.num_mem_tokens + use_sink
+                shape[-1] += self.num_mem_tokens + self.use_sink
+                shape[-2] += self.num_mem_tokens + self.use_sink
                 mask = torch.ones(*shape, dtype=dtype).to(attention_mask.device)
-                mask[..., int(use_sink):-self.num_mem_tokens, int(use_sink):-self.num_mem_tokens] = attention_mask
-                if use_sink:
+                mask[..., int(self.use_sink):-self.num_mem_tokens, int(self.use_sink):-self.num_mem_tokens] = attention_mask
+                if self.use_sink:
                     mask[..., 0, 1:] = 0
                 mask[..., :-self.num_mem_tokens, -self.num_mem_tokens:] = 0
                 # mask = torch.tril(mask)
                 if not os.environ.get("NOT_INVERT_ATTN_MASK"):
-                    mask = self.convert_to_infinity_attn_mask(mask, dtype)
+                    mask = invert_attn_mask(mask, dtype)
             else: 
-                shape[-1] += self.num_mem_tokens + use_sink
+                shape[-1] += self.num_mem_tokens + self.use_sink
                 mask = torch.ones(*shape, dtype=dtype).to(attention_mask.device)
-                mask[..., int(use_sink):-self.num_mem_tokens] = attention_mask
+                mask[..., int(self.use_sink):-self.num_mem_tokens] = attention_mask
             return mask.to(dtype)
 
-    def pad_prev_seg_attn_mask(self, prev_seg_attn_mask, use_sink, dtype=float):
+    def pad_prev_seg_attn_mask(self, prev_seg_attn_mask, dtype=float):
         if self.num_mem_tokens in {0, None}:
             return prev_seg_attn_mask
         else:
             shape = list(prev_seg_attn_mask.shape)
             if len(shape) == 4:
-                shape[-2] += self.num_mem_tokens + use_sink
+                shape[-2] += self.num_mem_tokens + self.use_sink
                 mask = torch.ones(*shape, dtype=dtype).to(prev_seg_attn_mask.device)
-                mask[..., int(use_sink):-self.num_mem_tokens, :] = prev_seg_attn_mask
-                if use_sink:
+                mask[..., int(self.use_sink):-self.num_mem_tokens, :] = prev_seg_attn_mask
+                if self.use_sink:
                     mask[..., 0, :] = 0
                 if not os.environ.get("NOT_INVERT_ATTN_MASK"):
-                    mask = self.convert_to_infinity_attn_mask(mask, dtype)
+                    mask = invert_attn_mask(mask, dtype)
             else: 
                 mask = prev_seg_attn_mask
             return mask.to(dtype)
@@ -591,7 +607,7 @@ class AssociativeMemoryCell(torch.nn.Module):
         past_key_values = past_key_values.to_legacy_cache()
         past_key_values = [
             [
-                k_or_v[..., -window_size:, :].detach() 
+                k_or_v[..., -(window_size+self.use_sink):, :].detach() 
                 for k_or_v in seg_kv
             ]
             for seg_kv in past_key_values
@@ -605,38 +621,45 @@ class AssociativeMemoryCell(torch.nn.Module):
         max_new_tokens = generate_kwargs['max_new_tokens']
         past_key_values = self.update_past_key_values_sw(generate_kwargs['past_key_values'], window_size)
         eos_token_id = generate_kwargs['eos_token_id']
+        prev_attn_mask_2d = prev_attn_mask.clone()
+        attention_mask_2d = attention_mask.clone()
         
+        attention_mask = attn_mask_to_4d(attention_mask, upper=False, query_len=attention_mask.size(-1))
+        prev_attn_mask = attn_mask_to_4d(prev_attn_mask, upper=True, query_len=attention_mask.size(-1))
+        seg_kwargs = self.process_input(input_ids=input_ids, attention_mask=attention_mask, prev_attn_mask=prev_attn_mask, past_key_values=past_key_values)
+        seg_kwargs['inputs_embeds'] = seg_kwargs['inputs_embeds'][..., :-self.num_mem_tokens, :]
+        seg_kwargs['attention_mask'] = seg_kwargs['attention_mask'][..., :-self.num_mem_tokens, :-self.num_mem_tokens]
+        outputs = self.model(**seg_kwargs, use_cache=True)
+        
+        next_token_logits = outputs.logits[:, -1, :]
+
+        past_key_values = outputs.past_key_values
+        past_key_values = self.update_past_key_values_sw(past_key_values, window_size)
+
         generated_ids = None
+        sw_attention_mask = torch.cat([prev_attn_mask_2d, torch.ones(attention_mask_2d.size(0), 1), attention_mask_2d], dim=-1)
 
-        sw_attention_mask = prev_attn_mask[..., -window_size:]
-
-        for i in range(input_ids.size(-1) + max_new_tokens):
+        for i in range(max_new_tokens):
+            next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
             
-            if i < input_ids.size(-1):
-                next_token_id = input_ids[..., i:i+1]
-            else:
-                next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
-            
-            if generated_ids is not None and i > input_ids.size(-1):
+            if generated_ids is not None:
                 generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
             else:
                 generated_ids = next_token_id
             next_input = next_token_id
             
-            if i < input_ids.size(-1):
-                sw_attention_mask =  torch.cat([sw_attention_mask, attention_mask[..., i:i+1]], dim=-1)[..., -window_size-1:]
-            else:
-                sw_attention_mask = torch.cat([sw_attention_mask, torch.ones_like(next_token_id)], dim=-1)[..., -window_size-1:]
+            sw_attention_mask = torch.cat([sw_attention_mask, torch.ones_like(next_token_id)], dim=-1)[..., -window_size-1-self.use_sink:]
             with torch.no_grad():
                 outputs = self.model(
                     input_ids=next_input,
                     attention_mask=sw_attention_mask,
                     past_key_values=past_key_values,
                     use_cache=True,
-                    cache_position=torch.full((1,), window_size + i)
+                    cache_position=torch.full((1,), window_size + i + input_ids.size(-1) + self.use_sink)
                 )
                 past_key_values = self.update_past_key_values_sw(outputs.past_key_values, window_size)
                 next_token_logits = outputs.logits[:, -1, :]
+                
                 if (next_token_id[:, 0] == eos_token_id).all() and i >= input_ids.size(-1):
                     break
         self.generate_mode(False)
@@ -654,18 +677,7 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
     def gradient_checkpointing_enable(self, *args, **kwargs):
         self.memory_cell.model.gradient_checkpointing_enable(*args, **kwargs)
     
-    def attn_mask_to_4d(self, attn_mask, upper, query_len):
-        if attn_mask is None:
-            return None
-        seg_len = attn_mask.size(-1)
-        if upper:
-            tri = torch.triu(torch.ones(query_len, seg_len))
-        else:
-            tri = torch.tril(torch.ones(query_len, seg_len))
-
-        mask = torch.einsum('bj,ij->bij', attn_mask, tri.to(attn_mask.device))
-        mask = mask.unsqueeze(1)
-        return mask
+    
 
     def process_segment(self, segment_kwargs, next_seg_len=None):
         sliding_window = self.rmt_config['sliding_window'] if 'sliding_window' in self.rmt_config else False
@@ -680,14 +692,14 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             segment_kwargs['prev_attn_mask'] = None
         segment_kwargs['zero_mem'] = False
         if sliding_window or attend_to_previous_input:
-            segment_kwargs['attention_mask'] = self.attn_mask_to_4d(attn_mask, upper=False, query_len=seg_len)
+            segment_kwargs['attention_mask'] = attn_mask_to_4d(attn_mask, upper=False, query_len=seg_len)
         
         
         num_mem_tokens = self.memory_cell.num_mem_tokens
         cell_out = self.memory_cell(**segment_kwargs)
         state = cell_out.get('state')
         if (sliding_window or attend_to_previous_input) and next_seg_len is not None:
-            prev_attn_mask = self.attn_mask_to_4d(attn_mask, upper=True, query_len=next_seg_len)
+            prev_attn_mask = attn_mask_to_4d(attn_mask, upper=True, query_len=next_seg_len)
         else: 
             prev_attn_mask = None
         if sliding_window:
