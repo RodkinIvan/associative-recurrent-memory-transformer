@@ -78,7 +78,7 @@ class AssociativeLayerWrapper(torch.nn.Module):
         self.first_seg = True
         self.correction = correction
 
-        
+
     def _to_heads(self, x):
         bsz, seq_len, d_model = x.shape
         x = x.reshape(bsz, seq_len, self.n_heads, d_model // self.n_heads)
@@ -632,7 +632,8 @@ class AssociativeMemoryCell(torch.nn.Module):
                     input_ids=next_input,
                     attention_mask=sw_attention_mask,
                     past_key_values=past_key_values,
-                    use_cache=True
+                    use_cache=True,
+                    cache_position=torch.full((1,), window_size + i)
                 )
                 past_key_values = self.update_past_key_values_sw(outputs.past_key_values, window_size)
                 next_token_logits = outputs.logits[:, -1, :]
