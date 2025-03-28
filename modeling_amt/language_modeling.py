@@ -637,7 +637,7 @@ class AssociativeMemoryCell(torch.nn.Module):
         past_key_values = self.update_past_key_values_sw(past_key_values, window_size)
 
         generated_ids = None
-        sw_attention_mask = torch.cat([prev_attn_mask_2d, torch.ones(attention_mask_2d.size(0), 1), attention_mask_2d], dim=-1)
+        sw_attention_mask = torch.cat([prev_attn_mask_2d, torch.ones(attention_mask_2d.size(0).to(prev_attn_mask_2d.device), 1), attention_mask_2d], dim=-1)
 
         for i in range(max_new_tokens):
             next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
@@ -648,14 +648,14 @@ class AssociativeMemoryCell(torch.nn.Module):
                 generated_ids = next_token_id
             next_input = next_token_id
             
-            sw_attention_mask = torch.cat([sw_attention_mask, torch.ones_like(next_token_id)], dim=-1)[..., -window_size-1-self.use_sink:]
+            sw_attention_mask = torch.cat([sw_attention_mask, torch.ones_like(next_token_id).to(sw_attention_mask.device)], dim=-1)[..., -window_size-1-self.use_sink:]
             with torch.no_grad():
                 outputs = self.model(
                     input_ids=next_input,
                     attention_mask=sw_attention_mask,
                     past_key_values=past_key_values,
                     use_cache=True,
-                    cache_position=torch.full((1,), window_size + i + input_ids.size(-1) + self.use_sink)
+                    cache_position=torch.full((1,), window_size + i + input_ids.size(-1) + self.use_sink).to(input_ids.device)
                 )
                 past_key_values = self.update_past_key_values_sw(outputs.past_key_values, window_size)
                 next_token_logits = outputs.logits[:, -1, :]
