@@ -607,7 +607,7 @@ class AssociativeMemoryCell(torch.nn.Module):
         past_key_values = past_key_values.to_legacy_cache()
         past_key_values = [
             [
-                k_or_v[..., -(window_size+self.use_sink):, :].detach() 
+                k_or_v[..., -(window_size+self.use_sink):, :]
                 for k_or_v in seg_kv
             ]
             for seg_kv in past_key_values
@@ -637,9 +637,10 @@ class AssociativeMemoryCell(torch.nn.Module):
         past_key_values = self.update_past_key_values_sw(past_key_values, window_size)
 
         generated_ids = None
-        sw_attention_mask = torch.cat([prev_attn_mask_2d, torch.ones(attention_mask_2d.size(0).to(prev_attn_mask_2d.device), 1), attention_mask_2d], dim=-1)
+        sw_attention_mask = torch.cat([prev_attn_mask_2d, torch.ones(attention_mask_2d.size(0), 1).to(prev_attn_mask_2d.device), attention_mask_2d], dim=-1)
 
         for i in range(max_new_tokens):
+            # print(next_token_logits[..., :5])
             next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
             
             if generated_ids is not None:
