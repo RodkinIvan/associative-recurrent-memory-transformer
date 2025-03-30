@@ -1,7 +1,7 @@
-export CUDA_VISIBLE_DEVICES=0,1
-export TORCH_NCCL_BLOCKING_WAIT=0
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export NCCL_BLOCKING_WAIT=0
 export WANDB_PROJECT=llm_pretrain
-NP=2
+NP=4
 set -e
 cd ../..
 
@@ -17,16 +17,16 @@ DATASET_NAME=pg19
 MODEL_NAME=meta-llama/Llama-3.2-1B
 MODEL_PATH=$MODEL_NAME
 
-TOKENIZED_DATASET=/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
+TOKENIZED_DATASET=~/rmt/datasets/pg19/pg19_tokenized
 
 ITERS=50000
-TBS=64
+TBS=256
 # TBS=32
-BS=1
+BS=2
 
 LR=1e-05
 SEGMENT_SIZE=512
-MAX_N_SEGMENTS=2
+MAX_N_SEGMENTS=4
 MEMORY_SIZE=32
 D_MEM=64
 LAYERS_ATTR=model.layers
@@ -40,6 +40,7 @@ do
 
 K2=-1   # BPTT unroll length
 
+MODEL_CPT=../runs/pg19/meta-llama/Llama-3.2-1B/linear_adamw_wd1e-03_4x512_mem32_bs256_bptt--1_nfs_dmem64/run_1/checkpoint-7000/pytorch_model.bin
 
 # cd accel_configs/
 # python create_config.py \
@@ -61,7 +62,7 @@ echo SAMPLE_SIZE $SAMPLE_SIZE MODEL_NAME $MODEL_NAME  LR $LR N $N
 echo gradient accumulation steps $GRAD_ACC_STEPS
 
 # python run_finetuning_lm_rmt.py \
-accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29002 --num_processes $NP --mixed_precision bf16 run_finetuning_lm_rmt_hf.py \
+accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29002 --num_processes $NP run_finetuning_lm_rmt_hf.py \
         --tokenized_dataset $TOKENIZED_DATASET \
         --output_dir ../runs/${DATASET_NAME}/$MODEL_NAME/${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}_nfs_dmem${D_MEM}/run_$N \
         --from_pretrained $MODEL_PATH \
@@ -92,8 +93,8 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29002 --num_pr
         --no_loss_from_first_segment \
         --valid_tokens tokens \
         --train_tokens tokens \
-        --prev_seg_kv \
-        --use_sink \
-        --attn_implementation eager
+        --attend_to_previous_input \
+        --model_cpt $MODEL_CPT
+        
 done
 echo "done"

@@ -46,6 +46,9 @@ parser.add_argument('--validate_only', action='store_true', default=False,
                     help='Skip training and run only validation. (default: False)')
 parser.add_argument('--working_dir', type=str, default='.',
                     help='working dir, should be a dir with t5-experiments repo (default: .)')
+
+parser.add_argument('--attn_implementation', type=str, default='flash_attention_2',
+                    help='')
 parser.add_argument('--show_valid_examples', type=int, default=0,
                     help='how many valid examples to show during training (default: 0)')
 parser.add_argument('--sample_size', type=int, default=128, help='input sequnce length (default: 128).')
@@ -245,7 +248,7 @@ if __name__ == '__main__':
         model = model_cls(config=model_cfg)
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
-        model = model_cls.from_pretrained(args.from_pretrained, attn_implementation="flash_attention_2",)
+        model = model_cls.from_pretrained(args.from_pretrained, attn_implementation=args.attn_implementation,)
 
     if args.use_lora:
         peft_config = LoraConfig(
