@@ -35,7 +35,7 @@ deepspeed_config = {
         "enabled": "auto"
     },
     "zero_optimization": {
-        "stage": 2
+        "stage": 3
     },
     "gradient_accumulation_steps": None,
     "gradient_clipping": 1.0,
