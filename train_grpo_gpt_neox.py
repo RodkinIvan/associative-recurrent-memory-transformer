@@ -3,14 +3,28 @@ import torch
 from datasets import load_dataset
 from transformers import AutoConfig, GPTNeoXForCausalLM, AutoTokenizer
 from trl import GRPOTrainer, GRPOConfig
-
+import argparse
 # Set environment
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--model_cfg', type=str, help='path to model configuration file')
+parser.add_argument('--lr', type=float, help='learning_rate', default=1e-4)
+parser.add_argument('--iters', type=int, help='number of iterations', default=40000)
+parser.add_argument('--batch_size', type=int, help='batch size', default=128)
+parser.add_argument('--num_generations', type=int, help='num grpo generations', default=32)
+
+
+
+
+args = parser.parse_args()
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 torch.cuda.empty_cache()
 
 # Load tokenizer and add special tokens
-tokenizer = AutoTokenizer.from_pretrained("./base_models/gptconfigs/neox_tiny", use_fast=True)
+tokenizer = AutoTokenizer.from_pretrained(args.model_cfg, use_fast=True)
 tokenizer.add_special_tokens({
     "additional_special_tokens": ["<sep>", "<gen>"],
     "pad_token": "[PAD]",
@@ -60,17 +74,18 @@ def reward_token_accuracy(completions, **kwargs):
     return rewards
 
 # Load model config and model
-config = AutoConfig.from_pretrained("./base_models/gptconfigs/neox_tiny")
+config = AutoConfig.from_pretrained(args.model_cfg)
 model = GPTNeoXForCausalLM(config)
 model.resize_token_embeddings(len(tokenizer))
 
 # GRPO Training config
 training_args = GRPOConfig(
     output_dir="optimized-GRPO",
+    learning_rate=args.lr,
     logging_steps=2,
-    per_device_train_batch_size=2,
-    num_generations=2,
-    max_steps=40000,
+    per_device_train_batch_size=args.batch_size,
+    num_generations=args.num_generations,
+    max_steps=args.iters,
     fp16=True,
 )
 
