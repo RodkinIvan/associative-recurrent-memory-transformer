@@ -10,7 +10,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 torch.cuda.empty_cache()
 
 # Load tokenizer and add special tokens
-tokenizer = AutoTokenizer.from_pretrained("./accel_configs/neox_tiny", use_fast=True)
+tokenizer = AutoTokenizer.from_pretrained("./base_models/gptconfigs/neox_tiny", use_fast=True)
 tokenizer.add_special_tokens({
     "additional_special_tokens": ["<sep>", "<gen>"],
     "pad_token": "[PAD]",
@@ -60,7 +60,7 @@ def reward_token_accuracy(completions, **kwargs):
     return rewards
 
 # Load model config and model
-config = AutoConfig.from_pretrained("./accel_configs/neox_tiny")
+config = AutoConfig.from_pretrained("./base_models/gptconfigs/neox_tiny")
 model = GPTNeoXForCausalLM(config)
 model.resize_token_embeddings(len(tokenizer))
 
