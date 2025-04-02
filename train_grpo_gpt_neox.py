@@ -11,6 +11,7 @@ import argparse
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_cfg', type=str, help='path to model configuration file')
 parser.add_argument('--lr', type=float, help='learning_rate', default=1e-4)
+parser.add_argument('--beta_kl', type=float, help='KL coefficient', default=0.0)
 parser.add_argument('--iters', type=int, help='number of iterations', default=40000)
 parser.add_argument('--batch_size', type=int, help='batch size', default=128)
 parser.add_argument('--num_generations', type=int, help='num grpo generations', default=32)
@@ -87,6 +88,7 @@ training_args = GRPOConfig(
     num_generations=args.num_generations,
     max_steps=args.iters,
     fp16=True,
+    beta=args.beta_kl,
 )
 
 # Trainer

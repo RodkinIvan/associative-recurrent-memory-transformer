@@ -6,8 +6,10 @@ MODEL_CFG=./base_models/gptconfigs/neox_tiny
 ITERS=10000
 # MAX_LENGTH=512
 LR=3e-4
-BS=256
-N_GENS=64
+BS=1024
+N_GENS=256
+
+BETA_KL=0
 
 cd ../..
 
@@ -16,4 +18,5 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
     --iters $ITERS \
     --lr $LR \
     --batch_size $BS \
-    --num_generations $N_GENS
+    --num_generations $N_GENS \
+    --beta_kl $BETA_KL
