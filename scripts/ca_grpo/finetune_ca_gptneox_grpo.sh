@@ -1,22 +1,38 @@
 export CUDA_VISIBLE_DEVICES=1
+export WANDB_PROEJCT=grpo
+export WANDB_NAME=gptneox
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 
 MODEL_CFG=./base_models/gptconfigs/neox_tiny
 
+
+# REASONER_CLS=modeling_reasoning.reasoning_wrapper:Reasoner
+MODEL_CLS=transformers:AutoModelForCausalLM
+
 ITERS=10000
 # MAX_LENGTH=512
 LR=3e-4
-BS=1024
-N_GENS=256
+TBS=1024
+N_GENS=4
 
 BETA_KL=0
+SHIFT=1
 
+BS=1024
+
+GRAD_ACC_STEPS=$(($TBS/$BS/$NP))
+
+
+N=2
 cd ../..
 
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29501 train_grpo_gpt_neox.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) train_grpo_gpt_neox.py \
     --model_cfg $MODEL_CFG \
+    --model_cls $MODEL_CLS \
     --iters $ITERS \
     --lr $LR \
     --batch_size $BS \
     --num_generations $N_GENS \
-    --beta_kl $BETA_KL
+    --beta_kl $BETA_KL \
+    --prediction_shift $SHIFT \
+    --gradient_accumulation_steps $GRAD_ACC_STEPS
