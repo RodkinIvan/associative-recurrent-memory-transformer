@@ -21,7 +21,7 @@ parser.add_argument('--model_cls', type=str, help='path to model class implement
 # parser.add_argument('--reasoner_cls', type=str, help='path to reasoner class implementation')
 parser.add_argument('--gradient_accumulation_steps', type=int, help='', default=1)
 parser.add_argument('--max_length', type=int, help='maximum completion length', default=256)
-
+parser.add_argument('--reasoning', action='store_true', default=False)
 
 
 
@@ -79,7 +79,10 @@ def reward_token_accuracy(completions, **kwargs):
     targets = kwargs.get("target", [""] * len(completions))
     rewards = []
     for comp_str, tgt_str in zip(completions, targets):
-        answer = comp_str.split("<sep>")[-1]
+        if args.reasoning:
+            answer = comp_str.split("<sep>")[-1]
+        else:
+            answer = comp_str
         pred_tokens = answer.strip().split()
         tgt_tokens = tgt_str.strip().split()
         correct = sum(p == t for p, t in zip(pred_tokens, tgt_tokens))
