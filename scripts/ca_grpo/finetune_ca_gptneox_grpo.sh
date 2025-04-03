@@ -1,5 +1,5 @@
-export CUDA_VISIBLE_DEVICES=1
-export WANDB_PROEJCT=grpo
+export CUDA_VISIBLE_DEVICES=0,1
+export WANDB_PROJECT=grpo
 export WANDB_NAME=gptneox
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 
@@ -12,8 +12,8 @@ MODEL_CLS=transformers:AutoModelForCausalLM
 ITERS=10000
 # MAX_LENGTH=512
 LR=3e-4
-TBS=1024
-N_GENS=4
+TBS=2048
+N_GENS=8
 
 BETA_KL=0
 SHIFT=1
