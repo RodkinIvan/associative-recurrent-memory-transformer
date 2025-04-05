@@ -23,7 +23,7 @@ BS=1024
 GRAD_ACC_STEPS=$(($TBS/$BS/$NP))
 
 
-N=2
+N=7
 cd ../..
 
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) train_grpo_gpt_neox.py \
@@ -35,4 +35,6 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
     --num_generations $N_GENS \
     --beta_kl $BETA_KL \
     --prediction_shift $SHIFT \
-    --gradient_accumulation_steps $GRAD_ACC_STEPS
+    --gradient_accumulation_steps $GRAD_ACC_STEPS \
+    --seed $(($N + 42))
+    # --reasoning

@@ -4,16 +4,7 @@
   "padding": null,
   "added_tokens": [
     {
-      "id": 123,
-      "content": "<gen>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 124,
+      "id": 100,
       "content": "<sep>",
       "single_word": false,
       "lstrip": false,
@@ -22,8 +13,17 @@
       "special": true
     },
     {
-      "id": 125,
-      "content": "[UNK]",
+      "id": 101,
+      "content": "<gen>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 102,
+      "content": "<eos>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -32,7 +32,7 @@
     },
     {
       "id": 126,
-      "content": "[SEP]",
+      "content": "<pad>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -41,7 +41,7 @@
     },
     {
       "id": 127,
-      "content": "[PAD]",
+      "content": "<unk>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -158,11 +158,11 @@
       "97": 97,
       "98": 98,
       "99": 99,
-      "100": 100,
-      "101": 101,
-      "102": 102,
-      "103": 103,
-      "104": 104,
+      "<sep>": 100,
+      "<gen>": 101,
+      "<eos>": 102,
+      "<rule>": 103,
+      "<mask>": 104,
       "105": 105,
       "106": 106,
       "107": 107,
@@ -180,12 +180,13 @@
       "119": 119,
       "120": 120,
       "121": 121,
-      "<gen>": 123,
-      "<sep>": 124,
-      "[UNK]": 125,
-      "[SEP]": 126,
-      "[PAD]": 127
+      "122": 122,
+      "123": 123,
+      "124": 124,
+      "125": 125,
+      "<pad>": 126,
+      "<unk>": 127
     },
-    "unk_token": "[UNK]"
+    "unk_token": "<unk>"
   }
 }

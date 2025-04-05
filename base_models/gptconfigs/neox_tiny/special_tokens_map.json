@@ -1,9 +1,9 @@
 {
   "additional_special_tokens": [
-    "<sep>",
     "<gen>"
   ],
-  "pad_token": "[PAD]",
-  "sep_token": "[SEP]",
-  "unk_token": "[UNK]"
+  "eos_token": "<eos>",
+  "pad_token": "<pad>",
+  "sep_token": "<sep>",
+  "unk_token": "<unk>"
 }
