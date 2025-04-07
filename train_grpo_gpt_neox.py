@@ -10,6 +10,8 @@ from transformers import TrainerCallback
 import pandas as pd
 import wandb
 import accelerate
+from torch.utils.data import DataLoader
+from collections import defaultdict
 # Set environment
 # os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
@@ -30,6 +32,7 @@ parser.add_argument('--reasoning', action='store_true', default=False)
 parser.add_argument('--seed', type=int, default=42, help='random seed for initialization')
 
 args = parser.parse_args()
+reasoning = args.reasoning
 
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed_all(args.seed)
@@ -135,6 +138,20 @@ def predict(model, tokenizer, sample):
         outputs = model.generate(**inputs, max_new_tokens=args.max_length, do_sample=False)
     return tokenizer.batch_decode(outputs)
 
+def metrics_fn(predictions, targets):
+    accuracies = []
+    for pred, label in zip(predictions, targets):
+        pred_tokens = pred.strip().split()
+        label_tokens = label.strip().split()
+        if len(label_tokens) == 0:
+            acc = 0.0
+        else:
+            # Compute token-level accuracy for this example
+            acc = sum(int(p == l) for p, l in zip(pred_tokens, label_tokens)) / len(label_tokens)
+        accuracies.append(acc)
+    
+    overall_accuracy = sum(accuracies) / len(accuracies) if accuracies else 0.0
+    return {"token_accuracy": overall_accuracy}
 
 _, train_dataset, val_dataset, test_dataset = accelerator.prepare(model, train_dataset, val_dataset, test_dataset)
 # GRPO Training config
@@ -198,8 +215,43 @@ class WandbPredictionProgressCallback(TrainerCallback):
               Defaults to 10.
         """
         super().__init__()
+        self.val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size)
+
         self.sample_dataset = val_dataset.select(range(num_samples))
     
+    def compute_metrics(self):
+        """Computes metrics for the validation dataset.
+
+        Returns:
+            dict: A dictionary containing the computed metrics.
+        """
+        # Compute metrics for the validation dataset
+        metrics = defaultdict(float)
+        for batch in self.val_dataloader:
+            predictions = predict(
+                trainer.model,
+                tokenizer,
+                batch
+            )
+            predictions = [pred[len(prompt):] for prompt, pred in zip(batch['prompt'], predictions)]
+            
+            if args.reasoning:
+                predictions = [pred.split("<sep>")[-1] for pred in predictions]
+            
+
+            targets = batch["target"]
+    
+            batch_metrics = metrics_fn(predictions, targets)
+            for key, value in batch_metrics.items():
+                metrics[key] += value
+        # Average the metrics over the number of batches
+        for key in metrics:
+            metrics[key] /= len(self.val_dataloader)
+        return metrics
+
+        
+
+
     def on_evaluate(self, args, state, control, **kwargs):
         super().on_evaluate(args, state, control, **kwargs)
         # control the frequency of logging by logging the predictions
@@ -215,13 +267,28 @@ class WandbPredictionProgressCallback(TrainerCallback):
         predictions_df = pd.DataFrame(predictions)
         predictions_df.columns = [str(c) for c in predictions_df.columns]
         predictions_df["epoch"] = state.epoch
+        predictions_df['prediction'] = predictions_df["0"].apply(
+            lambda x: x[len(self.sample_dataset[0]['prompt']):].split("<sep>")[-1] if reasoning else x[len(self.sample_dataset[0]['prompt']):]
+        )
+        predictions_df['target'] = self.sample_dataset["target"]
         records_table = wandb.Table(dataframe=predictions_df)
         # log the table to wandb
         thinking_len = sum(
             len(pred[len(sample['prompt']):].split()) - len(pred[len(sample['prompt']):].split("<sep>")[-1].split()) for sample, pred in zip(self.sample_dataset, predictions)
         ) / len(self.sample_dataset)
+
+
+        metrics = self.compute_metrics()
+
         if accelerator.is_main_process:
-            get_trainer_wandb_run(trainer).log({"sample_predictions": records_table, "thinking_len": thinking_len})
+            get_trainer_wandb_run(trainer).log({
+                "sample_predictions": records_table, 
+                "thinking_len": thinking_len, 
+                **metrics
+            })
+        
+
+
 
 progress_callback = WandbPredictionProgressCallback(
     val_dataset=val_dataset,
