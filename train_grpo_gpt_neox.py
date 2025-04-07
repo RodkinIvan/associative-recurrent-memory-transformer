@@ -142,7 +142,7 @@ def metrics_fn(predictions, targets):
     accuracies = []
     for pred, label in zip(predictions, targets):
         pred_tokens = pred.strip().split()
-        label_tokens = label.strip().split()
+        label_tokens = label.strip().split()[:-1] # Exclude EOS token
         if len(label_tokens) == 0:
             acc = 0.0
         else:
