@@ -47,15 +47,10 @@ logger = get_logger('')
 
 # Load tokenizer and add special tokens
 tokenizer = AutoTokenizer.from_pretrained(args.model_cfg, use_fast=True)
-tokenizer.add_special_tokens({
-    "additional_special_tokens": ["<sep>", "<gen>"],
-    "pad_token": "[PAD]",
-    "unk_token": "[UNK]",
-})
 
 SEP_TOKEN = "<sep>"
 GEN_TOKEN = "<gen>"
-EOS_TOKEN = "[EOS]"
+EOS_TOKEN = "<eos>"
 
 # Load datasets
 train_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="train")
