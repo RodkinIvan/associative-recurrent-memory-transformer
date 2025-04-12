@@ -537,8 +537,8 @@ class AssociativeMemoryCell(torch.nn.Module):
             seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], inputs_embeds.shape)
             if kwargs.get('prev_attn_mask') is not None:
                 seg_kwargs['attention_mask'] = torch.cat([kwargs['prev_attn_mask'], seg_kwargs['attention_mask']], dim=-1)
-            if 'prev_attn_mask' in seg_kwargs:
-                seg_kwargs.pop('prev_attn_mask')
+        if 'prev_attn_mask' in seg_kwargs:
+            seg_kwargs.pop('prev_attn_mask')
         seg_kwargs['output_hidden_states'] = True
 
         if self.wrap_pos:
