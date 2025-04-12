@@ -33,12 +33,14 @@ default_config = {
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--hidden_size", default=128)
+parser.add_argument("--intermediate_size", default=128)
 parser.add_argument("--num_hidden_layers", default=1)
 parser.add_argument("--num_attention_heads", default=1)
 args = parser.parse_args()
 
 config = dict(**default_config)
 config['hidden_size'] = int(args.hidden_size)
+config['intermediate_size'] = int(args.intermediate_size)
 config['num_hidden_layers'] = int(args.num_hidden_layers)
 config['num_attention_heads'] = int(args.num_attention_heads)
 
