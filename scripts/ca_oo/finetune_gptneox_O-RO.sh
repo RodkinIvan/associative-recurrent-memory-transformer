@@ -42,7 +42,7 @@ ACT_TYPE=layer
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $N_ATTN_HEADS --intermediate_size $(($DIM*4))
 cd ../..
-MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${N_ATTN_HEADS}hd${DIM}d.json
+MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${N_ATTN_HEADS}hd${DIM}.json
 
 for N in 12
 do
