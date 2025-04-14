@@ -17,3 +17,4 @@ lightning
 torch==2.3.1
 torchvision
 triton==2.3.1
+fvcore
