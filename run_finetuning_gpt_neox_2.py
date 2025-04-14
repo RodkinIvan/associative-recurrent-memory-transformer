@@ -504,9 +504,9 @@ if __name__ == '__main__':
         # 1) bit_accuracy
         if args.learn_rule:
             metrics['rule_bit_accuracy'] = np.mean((rule.cpu().numpy()) == (predicted_rule.cpu().numpy()))
-        metrics['rule_exact_match'] = np.mean([
-            np.array_equal(p_, y_) for p_, y_ in zip(predicted_rule.cpu().numpy(), rule.cpu().numpy())
-        ])
+            metrics['rule_exact_match'] = np.mean([
+                np.array_equal(p_, y_) for p_, y_ in zip(predicted_rule.cpu().numpy(), rule.cpu().numpy())
+            ])
         metrics['bit_accuracy'] = np.mean((y.cpu().numpy()) == (p.cpu().numpy()))
         # 2) exact_match
         metrics['exact_match'] = np.mean([
