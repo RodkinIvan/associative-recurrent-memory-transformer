@@ -96,7 +96,7 @@ def reward_token_accuracy(completions, **kwargs):
     rewards = []
     for comp_str, tgt_str in zip(completions, targets):
         if args.reasoning:
-            answer = comp_str.split("<sep>")[-1]
+            answer = comp_str.split(GEN_TOKEN)[-1]
         else:
             answer = comp_str
 
@@ -231,7 +231,7 @@ class WandbPredictionProgressCallback(TrainerCallback):
             predictions = [pred[len(prompt):] for prompt, pred in zip(batch['prompt'], predictions)]
             
             if args.reasoning:
-                predictions = [pred.split("<sep>")[-1] for pred in predictions]
+                predictions = [pred.split(GEN_TOKEN)[-1] for pred in predictions]
             
 
             targets = batch["target"]
@@ -263,7 +263,7 @@ class WandbPredictionProgressCallback(TrainerCallback):
         predictions_df.columns = [str(c) for c in predictions_df.columns]
         predictions_df["epoch"] = state.epoch
         predictions_df['prediction'] = predictions_df["0"].apply(
-            lambda x: x[len(self.sample_dataset[0]['prompt']):].split("<sep>")[-1] if reasoning else x[len(self.sample_dataset[0]['prompt']):]
+            lambda x: x[len(self.sample_dataset[0]['prompt']):].split(GEN_TOKEN)[-1] if reasoning else x[len(self.sample_dataset[0]['prompt']):]
         )
         predictions_df['target'] = self.sample_dataset["target"]
         records_table = wandb.Table(dataframe=predictions_df)
