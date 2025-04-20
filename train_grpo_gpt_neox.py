@@ -111,6 +111,7 @@ def reward_token_accuracy(completions, **kwargs):
 # Load model config and model
 print(f"*** Loading model of class {args.model_cls} ***")
 config = AutoConfig.from_pretrained(args.model_cfg)
+config.pad_token_id = tokenizer.pad_token_id
 
 model_cls = get_cls_by_name(args.model_cls)
 model = model_cls.from_config(config)
@@ -120,7 +121,7 @@ if args.model_cpt and args.model_cpt != "None":
     import safetensors
     model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
     cpt = safetensors.torch.load_file(model_cpt)
-    w = model.load_state_dict(cpt, strict=False)
+    w = model.load_state_dict(cpt)
     model.tie_weights()
     logger.info(f'loaded model with mis w {w}')
 
