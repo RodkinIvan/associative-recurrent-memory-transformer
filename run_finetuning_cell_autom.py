@@ -168,6 +168,8 @@ parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
 parser.add_argument('--predict_from_mask', action='store_true', default=False,
                     help='Diables autoregressive generation')
+parser.add_argument('--generate_gen_token', action='store_true', default=False,
+                    help='Generate gen token')
 
 
 
@@ -251,7 +253,10 @@ if __name__ == '__main__':
                         batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
                     else:
                         batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b[f'input_ids_{steps+shift-1}']
-                    # assert not args.learn_rule
+                
+                if args.generate_gen_token:
+                    batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,]
+
                 batch[i]['labels'] = batch[i]['input_ids'].copy()
                 batch[i]['attention_mask'] = [1 for _ in batch[i]['input_ids']] 
                 
@@ -264,7 +269,7 @@ if __name__ == '__main__':
             attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
             
             labels_mask = torch.zeros_like(input_ids).bool()
-            labels_mask[:, -(args.array_size+1+(args.learn_rule)*(args.rule_len+1)):] = True
+            labels_mask[:, -(args.array_size+1+(args.learn_rule)*(args.rule_len+1)+args.generate_gen_token):] = True
             collated = {'input_ids': input_ids,
                         'labels': labels, 
                         'attention_mask': attention_mask,
@@ -288,10 +293,10 @@ if __name__ == '__main__':
 
         args.array_size = len(train_dataset[0]['input_ids_0'])
 
-    right = 0
-    left = -args.array_size
+    right = -args.generate_gen_token
+    left = -args.array_size - args.generate_gen_token
     if args.learn_rule:
-        rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1)
+        rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1) - args.generate_gen_token
         rule_right = rule_left + args.rule_len
 
     train_rnd_generator = torch.Generator()
