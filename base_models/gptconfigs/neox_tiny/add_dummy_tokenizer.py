@@ -31,7 +31,11 @@ wrapped_tokenizer = PreTrainedTokenizerFast(
     sep_token="<sep>",
     pad_token="<pad>",
     eos_token="<eos>",
+    rule_token="<rule>",
 )
+
+# Add <gen> as a regular vocabulary token (not special)
+wrapped_tokenizer.add_tokens(["<gen>"])
 
 # Save tokenizer properly
 save_path = "../neox_tiny"
@@ -48,6 +52,8 @@ tokenizer_config = {
     "sep_token": "<sep>",
     "pad_token": "<pad>",
     "eos_token": "<eos>",
+    "gen_token": "<gen>",
+    "rule_token": "<rule>",
 }
 with open(os.path.join(save_path, "tokenizer_config.json"), "w") as f:
     json.dump(tokenizer_config, f, indent=2)

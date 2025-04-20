@@ -13,6 +13,15 @@
       "special": true
     },
     {
+      "id": 101,
+      "content": "<gen>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": true,
+      "special": false
+    },
+    {
       "id": 102,
       "content": "<eos>",
       "single_word": false,

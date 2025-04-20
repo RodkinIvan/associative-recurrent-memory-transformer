@@ -97,8 +97,7 @@ def reward_token_accuracy(completions, **kwargs):
     rewards = []
     for comp_str, tgt_str in zip(completions, targets):
         if args.reasoning:
-            answer = comp_str.rsplit(GEN_TOKEN, 1)[-1].strip() # Extract only the generated portion after the last GEN_TOKEN
-            
+            answer = comp_str.split(GEN_TOKEN)[-1].strip()
         else:
             answer = comp_str
 
@@ -149,8 +148,6 @@ def predict(model, tokenizer, sample):
 def metrics_fn(predictions, targets):
     accuracies = []
     for pred, label in zip(predictions, targets):
-        if args.reasoning:
-            pred = pred.split(GEN_TOKEN)[-1]
         pred_tokens = pred.strip().split()
         label_tokens = label.strip().split()[:-1] # Exclude EOS token
         if len(label_tokens) == 0:
@@ -283,7 +280,7 @@ class WandbPredictionProgressCallback(TrainerCallback):
         # log the table to wandb
         thinking_len = sum(
             len(pred[len(sample['prompt']):].split()) - len(pred[len(sample['prompt']):].split(GEN_TOKEN)[-1].split()) for sample, pred in zip(self.sample_dataset, predictions)
-        ) / len(self.sample_dataset)
+        ) / len(self.sample_dataset) if reasoning else 0
 
 
         metrics = self.compute_metrics()
