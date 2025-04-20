@@ -31,7 +31,6 @@ wrapped_tokenizer = PreTrainedTokenizerFast(
     sep_token="<sep>",
     pad_token="<pad>",
     eos_token="<eos>",
-    additional_special_tokens=["<gen>"]
 )
 
 # Save tokenizer properly
@@ -49,7 +48,6 @@ tokenizer_config = {
     "sep_token": "<sep>",
     "pad_token": "<pad>",
     "eos_token": "<eos>",
-    "additional_special_tokens": ["<gen>"]
 }
 with open(os.path.join(save_path, "tokenizer_config.json"), "w") as f:
     json.dump(tokenizer_config, f, indent=2)

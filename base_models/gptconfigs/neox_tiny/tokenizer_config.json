@@ -2,8 +2,5 @@
   "unk_token": "<unk>",
   "sep_token": "<sep>",
   "pad_token": "<pad>",
-  "eos_token": "<eos>",
-  "additional_special_tokens": [
-    "<gen>"
-  ]
+  "eos_token": "<eos>"
 }

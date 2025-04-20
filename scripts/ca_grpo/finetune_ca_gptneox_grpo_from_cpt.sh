@@ -39,5 +39,5 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
     --prediction_shift $SHIFT \
     --gradient_accumulation_steps $GRAD_ACC_STEPS \
     --seed $(($N + 42)) \
-    --model_cpt $MODEL_CPT
-    # --reasoning
+    --model_cpt $MODEL_CPT \
+    --reasoning
