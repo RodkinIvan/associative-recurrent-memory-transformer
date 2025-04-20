@@ -22,8 +22,10 @@ BS=1024
 
 GRAD_ACC_STEPS=$(($TBS/$BS/$NP))
 
-MODEL_CPT=../runs/lm_long/gpt_neox/CA//lr3e-4_linear_dmem1_10000-10x1000_mem1_bs256_iters40000_regular_bptt--1_act1/run_10
-N=7
+
+N=10
+
+MODEL_CPT=../checkpoints/gptneox_s1/
 cd ../..
 
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) train_grpo_gpt_neox.py \
