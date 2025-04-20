@@ -30,6 +30,7 @@ parser.add_argument('--gradient_accumulation_steps', type=int, help='', default=
 parser.add_argument('--max_length', type=int, help='maximum completion length', default=256)
 parser.add_argument('--reasoning', action='store_true', default=False)
 parser.add_argument('--seed', type=int, default=42, help='random seed for initialization')
+parser.add_argument('--model_cpt', type=str, default=None, help='path to model checkpoint')
 
 args = parser.parse_args()
 reasoning = args.reasoning
@@ -114,6 +115,16 @@ config = AutoConfig.from_pretrained(args.model_cfg)
 model_cls = get_cls_by_name(args.model_cls)
 model = model_cls.from_config(config)
 model.resize_token_embeddings(len(tokenizer))
+
+if args.model_cpt and args.model_cpt != "None":
+    print(f"*** Loading model checkpoint from {args.model_cpt} ***")
+    import safetensors
+    model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
+    cpt = safetensors.torch.load_file(model_cpt)
+    w = model.load_state_dict(cpt, strict=False)
+    model.memory_cell.model.tie_weights()
+    logger.info(f'loaded model with mis w {w}')
+
 print("*** Done loaing Model ***")
 
 def predict(model, tokenizer, sample):
