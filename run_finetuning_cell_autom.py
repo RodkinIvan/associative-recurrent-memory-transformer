@@ -404,9 +404,18 @@ if __name__ == '__main__':
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':
             model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
-            cpt = torch.load(model_cpt, map_location='cpu')
-            model.load_state_dict(cpt)
-            logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+            if os.path.exists(model_cpt):
+                cpt = torch.load(model_cpt, map_location='cpu')
+                model.load_state_dict(cpt)
+            else:
+                import safetensors
+                model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
+                cpt = safetensors.torch.load_file(model_cpt)
+                w = model.load_state_dict(cpt)
+                model.tie_weights()
+                logger.info(f'loaded model with mis w {w}')
+            logger.info(f'Loaded model state dict from: {args.model_cpt}')
+
 
     if args.freeze_model_weights:
         for n, p in model.named_parameters():
