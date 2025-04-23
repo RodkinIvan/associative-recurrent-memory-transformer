@@ -411,8 +411,7 @@ if __name__ == '__main__':
                 import safetensors
                 model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
                 cpt = safetensors.torch.load_file(model_cpt)
-                w = model.load_state_dict(cpt)
-                model.tie_weights()
+                w = model.load_state_dict(cpt, strict=False)
                 logger.info(f'loaded model with mis w {w}')
             logger.info(f'Loaded model state dict from: {args.model_cpt}')
 
