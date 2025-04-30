@@ -147,18 +147,24 @@ def predict(model, tokenizer, sample):
 
 def metrics_fn(predictions, targets):
     accuracies = []
+    exact_matches = []
     for pred, label in zip(predictions, targets):
         pred_tokens = pred.strip().split()
         label_tokens = label.strip().split()[:-1] # Exclude EOS token
         if len(label_tokens) == 0:
             acc = 0.0
+            exact_match = 0.0
         else:
             # Compute token-level accuracy for this example
             acc = sum(int(p == l) for p, l in zip(pred_tokens, label_tokens)) / len(label_tokens)
+            exact_match = int(pred_tokens[:len(label_tokens)] == label_tokens)
         accuracies.append(acc)
+        exact_matches.append(exact_match)
+
     
     overall_accuracy = sum(accuracies) / len(accuracies) if accuracies else 0.0
-    return {"token_accuracy": overall_accuracy}
+    overall_exact_match = sum(exact_matches) / len(exact_matches) if exact_matches else 0.0
+    return {"token_accuracy": overall_accuracy, "exact_match": overall_exact_match}
 
 _, train_dataset, val_dataset, test_dataset = accelerator.prepare(model, train_dataset, val_dataset, test_dataset)
 # GRPO Training config
