@@ -403,6 +403,7 @@ if __name__ == '__main__':
         
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':
+            
             model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
             if os.path.exists(model_cpt):
                 cpt = torch.load(model_cpt, map_location='cpu')
@@ -414,8 +415,6 @@ if __name__ == '__main__':
                 w = model.load_state_dict(cpt, strict=False)
                 logger.info(f'loaded model with mis w {w}')
             logger.info(f'Loaded model state dict from: {args.model_cpt}')
-
-
     if args.freeze_model_weights:
         for n, p in model.named_parameters():
             # if 'memory' not in n and 'wte' not in n:
