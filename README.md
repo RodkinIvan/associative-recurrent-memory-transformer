@@ -1,19 +1,16 @@
-# Recurrent Memory Transformer implementation compatible with Hugging Face models
+# Associative Recurrent Memory Transformer implementation compatible with Hugging Face models
 
 
-RMT is a memory-augmented segment-level recurrent Transformer. It achieves state-of-the art results on Hyperpartisan dataset and beats Transformer-XL on algorithmic tasks and LM with limited input and memory size.
+ARMT is a memory-augmented segment-level recurrent Transformer. It scales up to 50M tokens being trained only on 16k. 
+
+>[paper](https://arxiv.org/abs/2407.04841) Associative Recurrent Memory Transformer
 
 >[paper](https://arxiv.org/abs/2304.11062) Scaling Transformer to 1M tokens and beyond with RMT
 
->[paper](https://arxiv.org/abs/2207.06881) [code](https://github.com/booydar/LM-RMT) Recurrent Memory Transformer
+>[paper](https://arxiv.org/abs/2207.06881) Recurrent Memory Transformer
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/booydar/t5-experiments/blob/framework_accel/notebooks/rmt_demo_lm.ipynb) Example: LM with RMT
 
-Recurrent Memory Transformer is implemented as follows:
-
-![**RMT**](img/RMT_scheme.png?raw=True)
-
-We implement our memory mechanism with no changes to Transformer model by adding special memory tokens to the input sequence. The model is trained to control both memory operations and sequence representations processing.
+We implement our memory mechanism with no changes to Transformer model by adding special memory tokens and linear-attention style associative memory. The model is trained to control both memory operations and sequence representations processing.
 
 ## Installation
 ```bash
@@ -30,9 +27,28 @@ Full requirements for all experiments are specified in requirements.txt. Install
 pip install -r requirements.txt
 ```
 
+To run langudge modelling with ARMT with sliding window:
+
+```
+cd scripts/pg19
+bash finetune_armt_llama3.2_pg19_sliding.sh
+```
+
 
 ## Citation
 If you find our work useful, please cite the RMT papers:
+
+```
+@misc{rodkin2025associativerecurrentmemorytransformer,
+      title={Associative Recurrent Memory Transformer}, 
+      author={Ivan Rodkin and Yuri Kuratov and Aydar Bulatov and Mikhail Burtsev},
+      year={2025},
+      eprint={2407.04841},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2407.04841}, 
+}
+```
 ```
 @inproceedings{
         bulatov2022recurrent,
