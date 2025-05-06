@@ -3,7 +3,7 @@
 
 ARMT is a memory-augmented segment-level recurrent Transformer. It scales up to 50M tokens being trained only on 16k. 
 
->[paper](https://arxiv.org/abs/2407.04841) Associative Recurrent Memory Transformer
+>[paper](https://arxiv.org/abs/2407.04841) [code](https://github.com/RodkinIvan/associative-recurrent-memory-transformer/tree/llama_armt) Associative Recurrent Memory Transformer
 
 >[paper](https://arxiv.org/abs/2304.11062) Scaling Transformer to 1M tokens and beyond with RMT
 
