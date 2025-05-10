@@ -16,12 +16,12 @@ BACKBONE_CLS=transformers:GPTNeoXForCausalLM
 DATASET_PATH=irodkin/groupmul_A5_split
 
 ITERS=40000
-TBS=256
+TBS=512
 
 MAX_N_SEGMENTSS=(1 1 1 1)
-LENGTHS=(10 15 20)
+LENGTHS=(15 20)
 LR=3e-4
-BSS=(256 256 256 256)
+BSS=(512 512 512 512)
 
 MEMORY_SIZE=1
 INPUT_TOKENS=1000
@@ -44,7 +44,7 @@ MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}
 for N in 10
 do
 
-for (( j=0; j<${#MAX_N_SEGMENTSS[@]}; j++ ))
+for (( j=0; j<${#LENGTHS[@]}; j++ ))
 do
 MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j]}
 
@@ -86,7 +86,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --segment_size $INPUT_TOKENS \
         --max_n_segments $MAX_N_SEGMENTS \
         --num_mem_tokens $MEMORY_SIZE \
-        --optimize_metric exact_match --optimize_mode max \
+        --optimize_metric bit_accuracy --optimize_mode max \
         --batch_size $BS \
         --gradient_accumulation_steps $(($TBS/$BS/$NP)) \
         --iters $ITERS \
