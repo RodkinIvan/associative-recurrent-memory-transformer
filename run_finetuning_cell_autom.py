@@ -333,10 +333,15 @@ if __name__ == '__main__':
     
     ## load cpt of backbone model
     if args.backbone_cpt:
-        backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
-        cpt = torch.load(backbone_cpt, map_location='cpu')
-        model.load_state_dict(cpt['model_state_dict'])
-        logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
+        # backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
+        # cpt = torch.load(backbone_cpt, map_location='cpu')
+        # model.load_state_dict(cpt['model_state_dict'])
+        # logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
+        import safetensors
+        model_cpt = os.path.join(args.backbone_cpt, "model_best/model.safetensors")
+        cpt = safetensors.torch.load_file(model_cpt)
+        w = model.load_state_dict(cpt, strict=True)
+        logger.info(f'loaded model with mis w {w}')
 
     # Pass memory settings to pretrained model
     if True:
