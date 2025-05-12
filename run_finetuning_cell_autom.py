@@ -100,6 +100,8 @@ parser.add_argument('--repeat_state', action='store_true', default=False,
 
 parser.add_argument('--learn_rule', action='store_true', default=False,
                     help='learn rule during the training')
+parser.add_argument('--input_rule', action='store_true', default=False,
+                    help='input rule during the training')
 
 parser.add_argument('--dataset_path', type=str, default="irodkin/1dCA_r2s20T20", help="path to saved datasets")
 parser.add_argument('--segment_size', type=int, default=128, help='number of useful tokens in a segment')
@@ -239,6 +241,8 @@ if __name__ == '__main__':
                     }
                     if args.learn_rule:
                         batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids']
+                    if args.input_rule:
+                        batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
 
                     batch[i]['input_ids'] = batch[i]['input_ids'] + \
                         [sep_token if args.learn_rule else gen_token,] + \
@@ -249,6 +253,8 @@ if __name__ == '__main__':
                         # concatenate input_ids_t for the corresponding steps
                         'input_ids': [i for t in range(steps) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}']]
                     }
+                    if args.input_rule:
+                        batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
                     if args.learn_rule:
                         batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
                     else:
