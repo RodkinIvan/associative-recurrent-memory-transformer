@@ -197,13 +197,18 @@ class EarlyStoppingCallback(TrainerCallback):
         if metrics is None:
             return
             
-        current_metric = metrics.get('token_accuracy', 0.0)
+        # Get the reward metric which is the main metric we want to track
+        current_metric = metrics.get('eval_reward', 0.0)
+        
+        print(f"Early stopping check - Current metric: {current_metric:.4f}, Best metric: {self.best_metric:.4f}, No improvement count: {self.no_improvement_count}")
         
         if current_metric > self.best_metric:
             self.best_metric = current_metric
             self.no_improvement_count = 0
+            print(f"New best metric: {self.best_metric:.4f}")
         else:
             self.no_improvement_count += 1
+            print(f"No improvement for {self.no_improvement_count} evaluations")
             
         if self.patience is not None and self.no_improvement_count >= self.patience:
             control.should_training_stop = True
