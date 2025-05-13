@@ -1,4 +1,4 @@
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0
 export WANDB_PROJECT=grpo
 export WANDB_NAME=gptneox
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
@@ -16,7 +16,7 @@ TBS=2048
 N_GENS=8
 
 BETA_KL=0.01
-SHIFT=1
+SHIFTS=(2 3 4)
 
 BS=1024
 
@@ -27,6 +27,11 @@ N=10
 
 MODEL_CPT=../checkpoints/gptneox_s1/
 cd ../..
+
+for SHIFT in ${SHIFTS[@]}
+do
+
+N=$(($N + 1))
 
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) train_grpo_gpt_neox.py \
     --model_cfg $MODEL_CFG \
@@ -40,4 +45,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
     --gradient_accumulation_steps $GRAD_ACC_STEPS \
     --seed $(($N + 42)) \
     --model_cpt $MODEL_CPT \
-    --reasoning
+    --reasoning \
+    --early_stopping_patience 5
+
+done

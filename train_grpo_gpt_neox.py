@@ -31,6 +31,7 @@ parser.add_argument('--max_length', type=int, help='maximum completion length', 
 parser.add_argument('--reasoning', action='store_true', default=False)
 parser.add_argument('--seed', type=int, default=42, help='random seed for initialization')
 parser.add_argument('--model_cpt', type=str, default=None, help='path to model checkpoint')
+parser.add_argument('--early_stopping_patience', type=int, default=None, help='number of evaluation steps to wait before early stopping if no improvement')
 
 args = parser.parse_args()
 reasoning = args.reasoning
@@ -186,6 +187,28 @@ training_args = GRPOConfig(
     skip_memory_metrics=True
 )
 
+class EarlyStoppingCallback(TrainerCallback):
+    def __init__(self, patience):
+        self.patience = patience
+        self.best_metric = float('-inf')
+        self.no_improvement_count = 0
+        
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics is None:
+            return
+            
+        current_metric = metrics.get('token_accuracy', 0.0)
+        
+        if current_metric > self.best_metric:
+            self.best_metric = current_metric
+            self.no_improvement_count = 0
+        else:
+            self.no_improvement_count += 1
+            
+        if self.patience is not None and self.no_improvement_count >= self.patience:
+            control.should_training_stop = True
+            print(f"Early stopping triggered after {self.no_improvement_count} evaluations without improvement")
+
 # Trainer
 trainer = GRPOTrainer(
     model=model,
@@ -194,6 +217,9 @@ trainer = GRPOTrainer(
     train_dataset=train_dataset,
     eval_dataset=val_dataset,
 )
+
+if args.early_stopping_patience is not None:
+    trainer.add_callback(EarlyStoppingCallback(args.early_stopping_patience))
 
 def get_trainer_wandb_run(trainer):
     for callback in trainer.callback_handler.callbacks:
