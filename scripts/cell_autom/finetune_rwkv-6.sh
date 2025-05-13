@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
+export RWKV_NO_CUDA=1
+export RWKV_JIT_ON=0
+export CHUNK_LEN=1
+export RWKV_MY_TESTING=x060
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -9,9 +13,9 @@ CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 TASK_NAME=CA
 MODEL_TYPE=decoder
-MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
-RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
-BACKBONE_CLS=transformers:GPTNeoXForCausalLM
+MEMORY_CELL=baselines.dummy.language_modeling:MemoryCell
+RECURRENT_WRAPPER=baselines.dummy.language_modeling:RecurrentWrapper
+BACKBONE_CLS=baselines.rwkv.language_modeling:RWKV_v6
 
 DATASET_PATH=irodkin/1dCA_r2s20T20
 
@@ -20,10 +24,11 @@ TBS=256
 
 MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
-SHIFTS=(3)
+SHIFTS=(2)
 LRS=(3e-4)
 BSS=(256)
 
+MODEL_NAME=~/lab/rwkv6_tiny.pth
 MEMORY_SIZE=1
 INPUT_TOKENS=1000
 D_MEM=1
@@ -42,7 +47,7 @@ MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}
 
 
 
-for N in 10
+for N in 8
 do
 
 
@@ -84,7 +89,7 @@ echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEM
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_cell_autom.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \
-        --model_cfg $MODEL_CFG \
+        --from_pretrained $MODEL_NAME \
         --dataset_path $DATASET_PATH \
         --model_type $MODEL_TYPE \
         --memory_cell_cls $MEMORY_CELL \
@@ -110,12 +115,11 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --show_valid_examples 5 \
         --early_stopping_patience 30 \
         --seed $(($N+42*$j)) \
-        --clip_grad_value 0.5 \
+        --clip_grad_value 0.1 \
         --save_best \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
-        --freeze_mem \
-        --predict_from_mask
+        --freeze_mem
         # --act_on \
         # --max_hop $MAX_HOP \
         # --time_penalty 3e-4 \

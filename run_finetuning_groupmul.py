@@ -22,6 +22,11 @@ from torch.nn.utils.rnn import pad_sequence
 
 import accelerate
 
+from abstract_algebra.finite_algebras import (
+    FiniteAlgebra,
+    generate_cyclic_group,
+    generate_symmetric_group,
+)
 # load_dotenv()
 
 logger_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -50,8 +55,6 @@ import lm_experiments_tools.optimizers as optimizers  # noqa: E402
 # all gpus set with CUDA_VISIBLE_DEVICES are visible to process, indexing from 0 to ...
 
 parser = HfArgumentParser(TrainerArgs)
-parser.add_argument('--task_name', type=str, help='Scrolls task name: "gov_report", "summ_screen_fd", "qmsum", '
-                                                  '"narrative_qa", "qasper", "quality", "contract_nli"')
 
 parser.add_argument('--report_to', type=str, default='wandb', help='')
 parser.add_argument('--validate_only', action='store_true', default=False,
@@ -91,25 +94,13 @@ parser.add_argument('--model_type', type=str, default='decoder',
                          '(default: decoder)')
 
 # Dataset args
-parser.add_argument('--num_timesteps', type=int, default=None, help='number of timesteps in train sample')
-parser.add_argument('--num_test_timesteps', type=int, default=None, help='number of timesteps in test sample')
-parser.add_argument('--prediction_shift', type=int, default=1, help='num_timesteps between the last training steps and the predicted timestep')
+parser.add_argument('--length', type=int, default=10, help='number of group elements in a sequence')
 
-parser.add_argument('--repeat_state', action='store_true', default=False,
-                    help='repeat state in the input so the input look like: [s0, s1, s1, s2, s2, s3...]')
-
-parser.add_argument('--learn_rule', action='store_true', default=False,
-                    help='learn rule during the training')
-parser.add_argument('--input_rule', action='store_true', default=False,
-                    help='input rule during the training')
-
-parser.add_argument('--dataset_path', type=str, default="irodkin/1dCA_r2s20T20", help="path to saved datasets")
+parser.add_argument('--dataset_path', type=str, default="irodkin/groupmul_A5_split")
+parser.add_argument('--num_samples', type=int, default=100000, help='number of samples in a dataset')
 parser.add_argument('--segment_size', type=int, default=128, help='number of useful tokens in a segment')
 parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
 parser.add_argument('--layers_attr', type=str, default=None, help='attribute of model, which contains layers')
-
-parser.add_argument('--rewrite_setting', action='store_true', default=False,
-                    help='keys can occur several times')
 
 parser.add_argument('--act_on', action='store_true', default=False,
                     help='use Adaptive Computation Time')
@@ -128,27 +119,10 @@ parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
 # Aydar # RMT args 
-parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
 parser.add_argument('--vary_n_segments', action='store_true', default=False, help='Randomly choose segment number from 1 to max_n_segments')
 parser.add_argument('--segment_alignment', type=str, default=None, help="How to align segments when splitting input")
-# parser.add_argument('--sum_loss', action='store_true', default=False,
-#                     help='with this flag task loss from all segments is summed')
-# parser.add_argument('--bptt_depth', type=int, default=-1, help='max number of previous segments in gradient computation.')
-# parser.add_argument('--segment_ordering', type=str, help='segment order', default='regular',
-#                     choices=['regular', 'reversed', 'bidirectional', 'repeat_first', 'last_memory_only'])
-# parser.add_argument('--memory_forward_func', type=str, help='path to memory forward funсtion script', default=None)
-# parser.add_argument('--memory_layers', type=str, help='memory-augmented layer inds or "all" for all layers', default=None)
-# parser.add_argument('--share_memory_layers', action='store_true', help='share weights of memory layers', default=False)
-# parser.add_argument('--reconstruction_loss_coef', type=float, default=None,
-#                     help='reconstuction loss ratio in total loss')
-# # parser.add_argument('--segment_ordering', type=str,help='????', default='regular',
-# #                     choices=['regular', 'reversed', 'bidirectional', 'repeat_first', 'last_memory_only'])
-# parser.add_argument('--retain_graph', action='store_true', help='Retain computation graph during backward pass', default=False)
-# parser.add_argument('--use_truncated_backward', action='store_true', default=False,
-#                     help='whether to use RMT truncated bptt method in backward')
-# parser.add_argument('--k1', type=int, default=-1, help='(not implemented) If not -1, gradient update is done each k1 segments')
 parser.add_argument('--k2', type=int, default=-1, help='number of last segments used by backward')
 parser.add_argument('--freeze_model_weights', action='store_true', default=False,
                     help='Stop training all model weights except memory layers')
@@ -174,7 +148,6 @@ parser.add_argument('--generate_gen_token', action='store_true', default=False,
                     help='Generate gen token')
 
 
-parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 
 from tqdm.auto import tqdm
 
@@ -182,9 +155,6 @@ from tqdm.auto import tqdm
 if __name__ == '__main__':
     torch.autograd.set_detect_anomaly(True)
     args = parser.parse_args()
-    
-    if args.num_test_timesteps is None:
-        args.num_test_timesteps = args.num_timesteps
     # set current working dir
     args.working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(args.working_dir)
@@ -200,17 +170,6 @@ if __name__ == '__main__':
     if args.model_path is None:
         logger.warning('model_path is not set: config, logs and checkpoints will not be saved.')
 
-    # # create model path and save configuration
-    # # todo: use prepare run
-    # if accelerator.is_main_process and args.model_path is not None:
-    #     model_path = Path(args.model_path)
-    #     if not model_path.exists():
-    #         Path(model_path).mkdir(parents=True)
-    #     args_dict = collect_run_configuration(args)
-    #     # todo: if model path exists and there is config file, write new config file aside
-    #     json.dump(args_dict, open(model_path/'config.json', 'w'), indent=4)
-    #     open(model_path / 'git.diff', 'w').write(get_git_diff())
-
     prepare_run(args, logger, logger_fmt)
 
     # if not args.from_pretrained:
@@ -218,94 +177,35 @@ if __name__ == '__main__':
     # else:
     #     tokenizer = AutoTokenizer.from_pretrained(args.from_pretrained)
 
-    left = None
-    right = None
-    rule_left = None
-    rule_right = None
 
     import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
-    if args.model_type == 'decoder':
-        block_size = (args.segment_size + 1) * (1 + args.repeat_state)
-        sep_token, gen_token, eos_token = 100, 101, 102
-        rule_token = 103
-        mask_token = 104
 
-        def collate_fn(batch, valid=False):
-            for i, b in enumerate(batch):
-                steps = args.num_test_timesteps if valid else args.num_timesteps
-                shift = args.prediction_shift
-                if args.repeat_state:
-                    batch[i] = {
-                        # concatenate input_ids_t for the corresponding steps
-                        'input_ids': [i for t in range(steps-1) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}'] + [sep_token,] + b[f'input_ids_{t+1}']]
-                    }
-                    if args.learn_rule:
-                        batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids']
-                    if args.input_rule:
-                        batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
-
-                    batch[i]['input_ids'] = batch[i]['input_ids'] + \
-                        [sep_token if args.learn_rule else gen_token,] + \
-                            b[f'input_ids_{steps-1}'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
-
-                else:
-                    batch[i] = {
-                        # concatenate input_ids_t for the corresponding steps
-                        'input_ids': [i for t in range(steps) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}']]
-                    }
-                    if args.input_rule:
-                        batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
-                    if args.learn_rule:
-                        batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
-                    else:
-                        batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b[f'input_ids_{steps+shift-1}']
-                
-                if args.generate_gen_token:
-                    batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,]
-
-                batch[i]['labels'] = batch[i]['input_ids'].copy()
-                batch[i]['attention_mask'] = [1 for _ in batch[i]['input_ids']] 
-                
-            input_ids = torch.stack([torch.tensor(b['input_ids']) for b in batch], dim=0)
-            labels = torch.stack([torch.tensor(b['labels']) for b in batch], dim=0)
-            if args.learn_rule:
-                input_ids[:, rule_left:rule_right] = rule_token
-            if args.predict_from_mask:
-                input_ids[:, left:] = mask_token
-            attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
+    def collate_fn(batch, valid=False):
+        # assert False, "I should handle the autoregressive shift"
+        for i, b in enumerate(batch):
+            batch[i]['input_ids'] = np.array(b['input_ids'] + [0,])
+            batch[i]['labels'] = np.array([0,] + b['labels'])
+            batch[i]['attention_mask'] = np.ones_like(batch[i]['input_ids']).astype(np.int64)
             
-            labels_mask = torch.zeros_like(input_ids).bool()
-            labels_mask[:, -(args.array_size+1+(args.learn_rule)*(args.rule_len+1)+args.generate_gen_token):] = True
-            collated = {'input_ids': input_ids,
-                        'labels': labels, 
-                        'attention_mask': attention_mask,
-                        'labels_mask': labels_mask
-            }
-            # logger.info(collated['input_ids'].shape)
-            # assert False
-            return collated
-    else:
-        raise NotImplementedError(f'Unknown model type {args.model_type}')
+        input_ids = torch.stack([torch.tensor(b['input_ids']) for b in batch], dim=0)
+        labels = torch.stack([torch.tensor(b['labels']) for b in batch], dim=0)
+        attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
+        labels_mask = torch.ones_like(input_ids).bool()
+        collated = {'input_ids': input_ids,
+                    'labels': labels, 
+                    'attention_mask': attention_mask,
+                    'labels_mask': labels_mask
+        }
+        return collated
 
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
     # get train dataset
-    logger.info(f'preparing dataset for: {args.task_name}')
+    logger.info(f'preparing dataset for: Groupmul with dataset {args.dataset_path} and length {args.length}')
     with accelerator.main_process_first():
-        train_dataset = load_dataset(args.dataset_path, split='train')
-        args.rule_len = len(train_dataset[0]['rule_ids'])
-        logger.info(f'Rule len: {args.rule_len}')
-        valid_dataset = load_dataset(args.dataset_path, split='validation')
-        test_dataset = load_dataset(args.dataset_path, split='test')
-
-        args.array_size = len(train_dataset[0]['input_ids_0'])
-
-    right = -args.generate_gen_token
-    left = -args.array_size - args.generate_gen_token
-    if args.learn_rule:
-        rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1) - args.generate_gen_token
-        rule_right = rule_left + args.rule_len
-
+        train_dataset = load_dataset(args.dataset_path, f'length_{args.length}', split='train')
+        valid_dataset = load_dataset(args.dataset_path, f'length_{args.length}', split='validation')
+        test_dataset = load_dataset(args.dataset_path, f'length_{args.length}', split='test')
     train_rnd_generator = torch.Generator()
     train_rnd_generator.manual_seed(args.seed)
     per_worker_batch_size = args.batch_size * args.gradient_accumulation_steps
@@ -327,13 +227,6 @@ if __name__ == '__main__':
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
-        if 'lstm' in args.model_path:
-            model_cfg = model_cfg.to_dict()
-            model_cfg['act_on'] = args.act_on
-            model_cfg['max_hop'] = args.max_hop
-            model_cfg['act_type'] = args.act_type
-            model_cfg['time_penalty'] = args.time_penalty
-            model_cfg['constant_depth'] = args.constant_depth
         model = model_cls(config=model_cfg)
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
@@ -347,95 +240,81 @@ if __name__ == '__main__':
     
     ## load cpt of backbone model
     if args.backbone_cpt:
-        # backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
-        # cpt = torch.load(backbone_cpt, map_location='cpu')
-        # model.load_state_dict(cpt['model_state_dict'])
-        # logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
-        import safetensors
-        model_cpt = os.path.join(args.backbone_cpt, "model_best/model.safetensors")
-        cpt = safetensors.torch.load_file(model_cpt)
-        w = model.load_state_dict(cpt, strict=True)
-        logger.info(f'loaded model with mis w {w}')
+        backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
+        cpt = torch.load(backbone_cpt, map_location='cpu')
+        model.load_state_dict(cpt['model_state_dict'])
+        logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
 
     # Pass memory settings to pretrained model
-    if True:
+    memory_cell_cls = get_cls_by_name(args.memory_cell_cls)
+    recurrent_wrapper_cls = get_cls_by_name(args.recurrent_wrapper_cls)
+    logger.info(f'Wrapping in: {memory_cell_cls} and {recurrent_wrapper_cls}')
+    
+    
+    mem_cell_args = dict(
+        base_model=model,
+    )
+    if args.d_mem is not None:
+        mem_cell_args['d_mem'] = args.d_mem
+
+    if args.act_on:
+        mem_cell_args['act_on'] = args.act_on
+        mem_cell_args['max_hop'] = args.max_hop
         
-        memory_cell_cls = get_cls_by_name(args.memory_cell_cls)
-        recurrent_wrapper_cls = get_cls_by_name(args.recurrent_wrapper_cls)
-        logger.info(f'Wrapping in: {memory_cell_cls} and {recurrent_wrapper_cls}')
+        if args.act_type is not None:
+            mem_cell_args['act_type'] = args.act_type
+
+        if args.act_format is not None:
+            mem_cell_args['act_format'] = args.act_format
+        if args.noisy_halting:
+            mem_cell_args['noisy_halting'] = args.noisy_halting
+
+
+    if args.num_mem_tokens is not None:
+        mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
+        mem_cell_args['wrap_pos'] = args.wrap_pos
+    if args.layers_attr is not None:
+        mem_cell_args['layers_attr'] = args.layers_attr
+    if args.no_denom:
+        mem_cell_args['use_denom'] = not args.no_denom
+    if args.freeze_mem is not None:
+        mem_cell_args['freeze_mem'] = args.freeze_mem
+
+    if args.no_correction:
+        mem_cell_args['correction'] = False
+
+    
+
+    cell = memory_cell_cls(**mem_cell_args)
+
+    model = recurrent_wrapper_cls(cell, 
+                                    segment_size=args.segment_size,
+                                    max_n_segments=args.max_n_segments, 
+                                #   vary_n_segments=args.vary_n_segments,
+                                    k2=args.k2,
+                                    segment_alignment=args.segment_alignment,
+                                    act_on=args.act_on,
+                                    time_penalty=args.time_penalty
+    )
+                                
+    if 'armt' in args.model_path:
+
+        assert False, "ARMT is not supported yet"
+    
+    ## load cpt of rmt
+    if args.model_cpt and args.model_cpt != 'None':
         
-        
-        mem_cell_args = dict(
-            base_model=model,
-        )
-        if args.d_mem is not None:
-            mem_cell_args['d_mem'] = args.d_mem
-
-        if args.act_on:
-            mem_cell_args['act_on'] = args.act_on
-            mem_cell_args['max_hop'] = args.max_hop
-            
-            if args.act_type is not None:
-                mem_cell_args['act_type'] = args.act_type
-
-            if args.act_format is not None:
-                mem_cell_args['act_format'] = args.act_format
-            if args.noisy_halting:
-                mem_cell_args['noisy_halting'] = args.noisy_halting
-            if args.constant_depth:
-                mem_cell_args['constant_depth'] = args.constant_depth
-
-
-        if args.num_mem_tokens is not None:
-            mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
-            mem_cell_args['wrap_pos'] = args.wrap_pos
-        if args.layers_attr is not None:
-            mem_cell_args['layers_attr'] = args.layers_attr
-        if args.no_denom:
-            mem_cell_args['use_denom'] = not args.no_denom
-        if args.freeze_mem:
-            mem_cell_args['freeze_mem'] = args.freeze_mem
-
-        if args.no_correction:
-            mem_cell_args['correction'] = False
-
-        
-
-        cell = memory_cell_cls(**mem_cell_args)
-
-        model = recurrent_wrapper_cls(cell, 
-                                      segment_size=block_size,
-                                      max_n_segments=args.max_n_segments, 
-                                    #   vary_n_segments=args.vary_n_segments,
-                                      k2=args.k2,
-                                      segment_alignment=args.segment_alignment,
-                                      act_on=args.act_on,
-                                      time_penalty=args.time_penalty
-        )
-                                    
-        if 'armt' in args.model_path:
-
-            assert args.num_timesteps == args.num_test_timesteps
-            def spliter(x):
-                assert x.size(1) == (args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1, f'{x.size(1)} != {(args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1}'
-                return [x[:, i*block_size:(i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size:],]
-            if args.learn_rule:
-                model.split_tensor = spliter
-        
-        ## load cpt of rmt
-        if args.model_cpt and args.model_cpt != 'None':
-            
-            model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
-            if os.path.exists(model_cpt):
-                cpt = torch.load(model_cpt, map_location='cpu')
-                model.load_state_dict(cpt)
-            else:
-                import safetensors
-                model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
-                cpt = safetensors.torch.load_file(model_cpt)
-                w = model.load_state_dict(cpt, strict=False)
-                logger.info(f'loaded model with mis w {w}')
-            logger.info(f'Loaded model state dict from: {args.model_cpt}')
+        model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
+        if os.path.exists(model_cpt):
+            cpt = torch.load(model_cpt, map_location='cpu')
+            model.load_state_dict(cpt)
+        else:
+            import safetensors
+            model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
+            cpt = safetensors.torch.load_file(model_cpt)
+            w = model.load_state_dict(cpt, strict=False)
+            logger.info(f'loaded model with mis w {w}')
+        logger.info(f'Loaded model state dict from: {args.model_cpt}')
     if args.freeze_model_weights:
         for n, p in model.named_parameters():
             # if 'memory' not in n and 'wte' not in n:
@@ -495,26 +374,12 @@ if __name__ == '__main__':
             data['remainders'] = output['remainders']
         return data
 
-    # HF datasets can compute metrics on each gpu process and then aggregate them on process with rank 0
-    # synchronization is done by using temporay files on a shared filesystem
-    # rank and number of workers is set by num_process and process_id params
-    # BUT our Trainer aggregates all prediction from all gpus!
-    #   this will lead to computing metrics for predictions repeated xN_GPUS times
-    # need to try:
-    # - keep_in_memory=True, may lead to OOM for large validation sets, after sync predictions and targets for the full
-    #       validation set would be stored on each GPU -> xN_GPUs RAM
-    #   - implemented currently
-    # - compute metrics on batch lvl
-    # - add support of HF metrics and turn off aggregation in case if metric has .add_batch method
-
     def metrics_fn(data):
         # compute metrics based on stored labels, predictions, ...
         
         metrics = {}
         l = data['labels'].size(1)
-        y, p = data['labels'][:, l+left:l+right], data['predictions'][:, left-1:right-1]
-        if args.learn_rule:
-            y_rule, p_rule = data['labels'][:, rule_left:rule_right], data['predictions'][:, rule_left-1:rule_right-1]
+        y, p = data['labels'][:, 1:], data['predictions'][:, :-1]
 
         if accelerator.is_main_process and args.show_valid_examples > 0:
             for i in range(min(args.show_valid_examples, len(y))):
@@ -543,10 +408,7 @@ if __name__ == '__main__':
         metrics['bit_accuracy'] = np.mean(np.array(y) == np.array(p))
         metrics['exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p, y)])
 
-        if args.learn_rule:
-            metrics['rule_bit_accuracy'] = np.mean(np.array(y_rule) == np.array(p_rule))
-            assert p_rule.size(1) == y_rule.size(1) == args.rule_len
-            metrics['rule_exact_match'] = np.mean([np.array_equal(p_, y_) for p_, y_ in zip(p_rule, y_rule)])
+        
         if args.act_on:
             metrics['n_updates'] = torch.mean(data['n_updates']).item()
             metrics['remainders'] = torch.mean(data['remainders']).item()
@@ -563,10 +425,6 @@ if __name__ == '__main__':
         fwd_kwargs['output_only_last_segment'] = True
     
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
-
-    fwd_kwargs = dict()
-    if 'armt' in args.model_path:
-        fwd_kwargs['output_only_last_segment'] = True
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
                       ###booydar

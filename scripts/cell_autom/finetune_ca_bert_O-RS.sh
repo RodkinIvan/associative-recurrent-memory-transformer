@@ -9,9 +9,9 @@ CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 TASK_NAME=CA
 MODEL_TYPE=decoder
-MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
-RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
-BACKBONE_CLS=transformers:GPTNeoXForCausalLM
+MEMORY_CELL=baselines.dummy.language_modeling:MemoryCell
+RECURRENT_WRAPPER=baselines.dummy.language_modeling:RecurrentWrapper
+BACKBONE_CLS=transformers:BertForMaskedLM
 
 DATASET_PATH=irodkin/1dCA_r2s20T20
 
@@ -21,7 +21,7 @@ TBS=256
 MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
 SHIFTS=(3)
-LRS=(3e-4)
+LRS=(1e-4)
 BSS=(256)
 
 MEMORY_SIZE=1
@@ -32,17 +32,16 @@ N_HEADS=1
 ACT_TYPE=layer
 MAX_HOP=4
 
-DIM=128
+DIM=512
 NUM_LAYERS=4
-
-cd base_models/gptconfigs
-python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
-cd ../..
-MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
+N_ATTN_HEADS=8
 
 
+MODEL_CFG=./base_models/configs/bert_configs/bert_${NUM_LAYERS}L_D${DIM}_H${N_ATTN_HEADS}.json
 
-for N in 10
+
+
+for N in 12
 do
 
 
@@ -73,7 +72,7 @@ do
 # if [[ j -gt 0 ]]
 # then
 #     PREV_SEQ_LEN=$(((INPUT_SIZE)*${MAX_N_SEGMENTSS[j-1]}))
-#     MODEL_CPT=../runs/lm_long/armt/${TASK_NAME}/$MODEL_NAME/lr${LRS[j-1]}_${SCHEDULER}_dmem${D_MEM}_${PREV_SEQ_LEN}-${MAX_N_SEGMENTSS[j-1]}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N 
+#     MODEL_CPT=../runs/lm_long/bert/${TASK_NAME}/$MODEL_NAME/lr${LRS[j-1]}_${SCHEDULER}_dmem${D_MEM}_${PREV_SEQ_LEN}-${MAX_N_SEGMENTSS[j-1]}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N 
 # else
 #     MODEL_CPT=None
 # fi
@@ -83,7 +82,7 @@ echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_cell_autom.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \
+        --model_path ../runs/lm_long/bert/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \
         --model_cfg $MODEL_CFG \
         --dataset_path $DATASET_PATH \
         --model_type $MODEL_TYPE \
@@ -112,9 +111,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --seed $(($N+42*$j)) \
         --clip_grad_value 0.5 \
         --save_best \
-        --d_mem $D_MEM \
-        --layers_attr gpt_neox.layers \
-        --freeze_mem \
+        --learn_rule \
         --predict_from_mask
         # --act_on \
         # --max_hop $MAX_HOP \

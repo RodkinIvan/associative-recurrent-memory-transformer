@@ -18,11 +18,11 @@ DATASET_PATH=irodkin/1dCA_r2s20T20
 ITERS=40000
 TBS=256
 
-MAX_N_SEGMENTSS=(10)
-MAX_VAL_SEGMENTSS=(10)
-SHIFTS=(3)
-LRS=(3e-4)
-BSS=(256)
+MAX_N_SEGMENTSS=(10 10 10)
+MAX_VAL_SEGMENTSS=(10 10 10)
+SHIFTS=(2 3 4)
+LRS=(3e-4 3e-4 3e-4)
+BSS=(256 256 256)
 
 MEMORY_SIZE=1
 INPUT_TOKENS=1000
@@ -35,6 +35,7 @@ MAX_HOP=4
 DIM=128
 NUM_LAYERS=4
 
+
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
 cd ../..
@@ -42,7 +43,7 @@ MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}
 
 
 
-for N in 10
+for N in 11
 do
 
 
@@ -77,7 +78,7 @@ do
 # else
 #     MODEL_CPT=None
 # fi
-MODEL_CPT=None
+BACKBONE_CPT=../checkpoints/gptneox_s1/
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
@@ -90,7 +91,6 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --memory_cell_cls $MEMORY_CELL \
         --recurrent_wrapper_cls $RECURRENT_WRAPPER \
         --model_cls $BACKBONE_CLS \
-        --model_cpt $MODEL_CPT \
         --segment_size $INPUT_TOKENS \
         --input_size $INPUT_SIZE \
         --max_n_segments $MAX_N_SEGMENTS \
@@ -115,11 +115,11 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
         --freeze_mem \
-        --predict_from_mask
-        # --act_on \
-        # --max_hop $MAX_HOP \
-        # --time_penalty 3e-4 \
-        # --act_type $ACT_TYPE \
+        --backbone_cpt $BACKBONE_CPT \
+        --act_on \
+        --max_hop $MAX_HOP \
+        --time_penalty 3e-4 \
+        --act_type $ACT_TYPE
 done
 done
 done

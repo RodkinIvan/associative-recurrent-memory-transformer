@@ -3,7 +3,7 @@ import torch
 from torch.nn import CrossEntropyLoss
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 from munch import Munch
-
+import inspect
 class MemoryCell(torch.nn.Module):
     def __init__(self, base_model, **kwargs):
         super().__init__()
@@ -11,7 +11,12 @@ class MemoryCell(torch.nn.Module):
         
         
     def forward(self, input_ids, memory_state=None, **kwargs):
-        out = self.model(input_ids, **kwargs)
+        args = inspect.signature(self.model.forward).parameters
+        model_kwargs = kwargs.copy()
+        for key in kwargs.keys():
+            if key not in args:
+                model_kwargs.pop(key)
+        out = self.model(input_ids, **model_kwargs)
         return out, memory_state
     
     def generate(self, input_ids, memory_state, attention_mask, **generate_kwargs):

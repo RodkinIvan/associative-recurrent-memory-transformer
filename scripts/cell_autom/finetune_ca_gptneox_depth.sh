@@ -18,11 +18,11 @@ DATASET_PATH=irodkin/1dCA_r2s20T20
 ITERS=40000
 TBS=256
 
-MAX_N_SEGMENTSS=(10)
-MAX_VAL_SEGMENTSS=(10)
-SHIFTS=(3)
-LRS=(3e-4)
-BSS=(256)
+MAX_N_SEGMENTSS=(10 10 10 10 10 10 10)
+MAX_VAL_SEGMENTSS=(10 10 10 10 10 10 10)
+SHIFTS=(3 4)
+LRS=(3e-4 3e-4 3e-4 3e-4 3e-4 3e-4 3e-4)
+BSS=(256 256 256 256 256 256 256)
 
 MEMORY_SIZE=1
 INPUT_TOKENS=1000
@@ -33,21 +33,26 @@ ACT_TYPE=layer
 MAX_HOP=4
 
 DIM=128
-NUM_LAYERS=4
+N_ATTN_HEADS=4
+NUMS_LAYERS=(5 6 7 8 9 10 11)
 
-cd base_models/gptconfigs
-python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
-cd ../..
-MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
 
 
 for N in 10
 do
 
-
-for (( j=0; j<${#MAX_N_SEGMENTSS[@]}; j++ ))
+for SHIFT in ${SHIFTS[@]}
 do
+
+for (( j=0; j<${#NUMS_LAYERS[@]}; j++ ))
+do
+
+NUM_LAYERS=${NUMS_LAYERS[j]}
+cd base_models/gptconfigs
+python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $N_ATTN_HEADS
+cd ../..
+MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${N_ATTN_HEADS}hd${DIM}.json
 
 MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j]}
 MAX_VAL_SEGMENTS=${MAX_VAL_SEGMENTSS[j]}
@@ -57,7 +62,6 @@ INPUT_SEQ_LEN=$(((INPUT_SIZE)*MAX_N_SEGMENTS))
 TGT_LEN=$INPUT_SEQ_LEN
 LR_=${LRS[j]}
 VAL_SEQ_LEN=$(((INPUT_SIZE)*MAX_VAL_SEGMENTS))
-SHIFT=${SHIFTS[j]}
 
 BS=${BSS[j]}
 K2=-1
@@ -83,7 +87,7 @@ echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_cell_autom.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \
+        --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_${NUM_LAYERS}dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act${ACT_TYPE}_shift${SHIFT}/run_$N \
         --model_cfg $MODEL_CFG \
         --dataset_path $DATASET_PATH \
         --model_type $MODEL_TYPE \
@@ -114,12 +118,12 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --save_best \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
-        --freeze_mem \
-        --predict_from_mask
+        --freeze_mem
         # --act_on \
         # --max_hop $MAX_HOP \
         # --time_penalty 3e-4 \
         # --act_type $ACT_TYPE \
+done
 done
 done
 done

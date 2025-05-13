@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=0
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -20,7 +20,7 @@ TBS=256
 
 MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
-SHIFTS=(3)
+SHIFTS=(2)
 LRS=(3e-4)
 BSS=(256)
 
@@ -34,6 +34,7 @@ MAX_HOP=4
 
 DIM=128
 NUM_LAYERS=4
+
 
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
@@ -77,7 +78,7 @@ do
 # else
 #     MODEL_CPT=None
 # fi
-MODEL_CPT=None
+MODEL_CPT=../checkpoints/wrapped_gptneox_s1/
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
@@ -115,7 +116,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
         --freeze_mem \
-        --predict_from_mask
+        --model_cpt $MODEL_CPT
         # --act_on \
         # --max_hop $MAX_HOP \
         # --time_penalty 3e-4 \

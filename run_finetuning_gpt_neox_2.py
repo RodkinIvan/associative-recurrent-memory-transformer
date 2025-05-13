@@ -108,7 +108,8 @@ parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
 parser.add_argument('--num_predict', type=int, default=4, help='number of predicted states')
 parser.add_argument('--cot_setting', action='store_true', default=False, help='use CoT')
-
+parser.add_argument('--learn_rule', action='store_true', default=False,
+                    help='learn rule')
 parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 
 
@@ -123,7 +124,8 @@ if __name__ == '__main__':
     accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
 
     args.block_size = (args.segment_size + 1) * (1 + args.repeat_state)
-    sep_token, gen_token, eos_token, mask_token = 100, 101, 102, 103
+    sep_token, gen_token, eos_token, mask_token = 100, 101, 102, 104
+    rule_token = 103
     
     logger = get_logger('')
     logger.info(args.model_cls)
@@ -145,6 +147,8 @@ if __name__ == '__main__':
 
     with accelerator.main_process_first():
         train_dataset = load_dataset(dataset_path, split='train')
+        args.rule_len = len(train_dataset[0]['rule_ids'])
+
         valid_dataset = load_dataset(dataset_path, split='validation')
         test_dataset = load_dataset(dataset_path, split='test')
         if args.dataset_name in ["ca", "addition_binary", "addition_decimal"]: 
@@ -168,18 +172,27 @@ if __name__ == '__main__':
     ):
         for i, b in enumerate(batch):
             input_ids_seq = []
+
             for t in range(num_timesteps - args.repeat_state):
                 input_ids_seq += [sep_token] + b[f'input_ids_{t}']
                 if args.repeat_state:
                     input_ids_seq += [sep_token] + b[f'input_ids_{t+1}']
             
-                
+            
+            if args.learn_rule:
+                input_ids_seq += [gen_token] + b['rule_ids']
             if args.repeat_state:
                 input_ids_seq += [gen_token] + b[f'input_ids_{num_timesteps - 1}']
             else:
                 input_ids_seq += [gen_token] 
             labels_seq = input_ids_seq.copy()
+            
+            if args.learn_rule:
+                input_ids_seq[-args.rule_len:] = [rule_token] * args.rule_len
+
             labels_mask_seq = [0] * len(input_ids_seq)
+            if args.learn_rule:
+                labels_mask_seq[-len(b['rule_ids']) - 1:] = [1] * (len(b['rule_ids']) + 1)
             input_ids_generate_seq = input_ids_seq.copy() + [sep_token,]
 
             for t in range(num_timesteps, num_timesteps + num_predict):
@@ -224,6 +237,7 @@ if __name__ == '__main__':
         num_timesteps=args.num_timesteps,  # how many states are "given" at the start
         valid=False,
     ):
+        assert not args.learn_rule, 'learn_rule is not supported for ca_adaptive'
         # mapping from shift to special token
         shift2token = {
             1: 106,
@@ -381,6 +395,7 @@ if __name__ == '__main__':
     state_size = args.segment_size
     if 'armt' in args.model_path:
             assert args.num_timesteps == args.num_test_timesteps
+            assert not args.learn_rule
             def spliter(x):
                 if args.task_name == 'ca_oo':
                     assert (x.size(1) == (args.num_timesteps - args.repeat_state) * block_size + (state_size + 1) * (args.num_predict+args.repeat_state)) or x.size(1) == (args.num_timesteps - args.repeat_state) * block_size + (state_size + 1) * (args.repeat_state) + 1, f'{x.size(1)} != {(args.num_timesteps - args.repeat_state) * block_size + (state_size + 1) * (args.num_predict+args.repeat_state)} and {x.size(1)} != {(args.num_timesteps - args.repeat_state) * block_size + (state_size + 1) * (args.repeat_state) + 1}'
@@ -470,23 +485,33 @@ if __name__ == '__main__':
         metrics = {}
 
         # region of reference ( ground truth ), same for ARMT or other variants
-        if 'armt' not in args.model_path:
-            y = data['labels'][:, -total_pred_size:]
-        else:
-            # The original code had a separate condition, but it was effectively the same slice
-            y = data['labels'][:, -total_pred_size:]
-        
+        y = data['labels'][:, -total_pred_size:]
+        if args.learn_rule:
+            rule = data['labels'][:, -total_pred_size - 1 - args.rule_len:-total_pred_size - 1]
         # region of predictions
         # shift by -1 because we typically ignore the last token for next-token prediction
         if 'generation_outputs' not in output:
             p = data['predictions'][:, -total_pred_size - 1 : -1]
+            if args.learn_rule:
+                predicted_rule = data['predictions'][:, -total_pred_size - 2 - args.rule_len:-total_pred_size - 2]
         else:
-            p = output['generation_outputs'][:, :total_pred_size]
+            if args.learn_rule:
+                p = output['generation_outputs'][:, args.rule_len:args.rule_len + total_pred_size]
+                if args.learn_rule:
+                    predicted_rule = output['generation_outputs'][:, :args.rule_len]
+            else:
+                p = output['generation_outputs'][:, :total_pred_size]
+
 
         # ==============
         # Overall metrics
         # ==============
         # 1) bit_accuracy
+        if args.learn_rule:
+            metrics['rule_bit_accuracy'] = np.mean((rule.cpu().numpy()) == (predicted_rule.cpu().numpy()))
+            metrics['rule_exact_match'] = np.mean([
+                np.array_equal(p_, y_) for p_, y_ in zip(predicted_rule.cpu().numpy(), rule.cpu().numpy())
+            ])
         metrics['bit_accuracy'] = np.mean((y.cpu().numpy()) == (p.cpu().numpy()))
         # 2) exact_match
         metrics['exact_match'] = np.mean([

@@ -9,7 +9,12 @@ from munch import Munch
 import os
 
 from modeling_amt.act_utils import ACT_basic, gen_timing_signal, ACTForWholeARMT, ACT_transformer, ACT_constant_depth, ACTForWholeARMT_constant_depth
-from baselines.rwkv.language_modeling import RWKVModel
+try:
+    from baselines.rwkv.language_modeling import RWKVModel
+    RWKV_imported = True
+except ImportError:
+    print("*** Can't import RWKV model ***")
+    RWKV_imported = False
 
 def dpfp(x, nu=1):
   x = torch.cat([r(x), r(-x)], dim=-1)
@@ -376,8 +381,8 @@ class AssociativeMemoryCell(torch.nn.Module):
         ):
         super().__init__()
         self.model = base_model
-
-        self.RWKV_ARMT = isinstance(self.model, RWKVModel)
+        
+        self.RWKV_ARMT = isinstance(self.model, RWKVModel) if RWKV_imported else False
 
         self.num_mem_tokens = num_mem_tokens
         self.d_mem = d_mem
@@ -562,8 +567,8 @@ class AssociativeMemoryCell(torch.nn.Module):
             seg_kwargs['attention_mask'] = self.pad_attention_mask(kwargs['attention_mask'], inputs_embeds.shape)
             if kwargs.get('prev_attn_mask') is not None:
                 seg_kwargs['attention_mask'] = torch.cat([kwargs['prev_attn_mask'], seg_kwargs['attention_mask']], dim=-1)
-            if 'prev_attn_mask' in seg_kwargs:
-                seg_kwargs.pop('prev_attn_mask')
+        if 'prev_attn_mask' in seg_kwargs:
+            seg_kwargs.pop('prev_attn_mask')
         seg_kwargs['output_hidden_states'] = True
 
         if self.wrap_pos:
