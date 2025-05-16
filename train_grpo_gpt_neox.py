@@ -194,11 +194,10 @@ class EarlyStoppingCallback(TrainerCallback):
         self.no_improvement_count = 0
         
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        if metrics is None:
+        if metrics is None or 'reward' not in metrics:
             return
-            
         # Get the reward metric which is the main metric we want to track
-        current_metric = metrics.get('eval_reward', 0.0)
+        current_metric = metrics['reward']
         
         print(f"Early stopping check - Current metric: {current_metric:.4f}, Best metric: {self.best_metric:.4f}, No improvement count: {self.no_improvement_count}")
         
