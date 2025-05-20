@@ -429,24 +429,6 @@ class AssociativeMemoryCell(torch.nn.Module):
             else:
                 raise f'Unknown ACT type: {act_type}'
 
-            # if act_on:
-            #     kw['act_format']=act_format
-            #     kw['constant_depth'] = self.constant_depth
-            # if act_on and (act_type != 'model'):
-            #     kw['max_hop'] = max_hop
-            # if act_on and noisy_halting:
-            #     kw['noisy_halting'] = noisy_halting
-            # if not act_on:
-            #     self.layers[i] = AssociativeLayerWrapper(**kw)
-            # elif act_type == 'associative':
-            #     self.layers[i] = AdaptiveAssociativeLayerWrapper(**kw)
-            # elif act_type == 'layer':
-            #     self.layers[i] = AdaptiveAssociativeLayerWrapper2(**kw)
-            # elif act_type == 'model':
-            #     self.layers[i] = AssociativeLayerWrapper(**kw)
-            # else:
-            #     raise f'Unknown ACT type: {act_type}'
-
         if act_type == 'model':
             self.act = ACTForWholeARMT(self.d_model) if not self.constant_depth else ACTForWholeARMT_constant_depth()
             self.depth = max_hop
