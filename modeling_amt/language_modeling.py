@@ -15,7 +15,6 @@ try:
 except ImportError:
     print("*** Can't import RWKV model ***")
     RWKV_imported = False
-
 def dpfp(x, nu=1):
   x = torch.cat([r(x), r(-x)], dim=-1)
   x_rolled = torch.cat([x.roll(shifts=j, dims=-1)

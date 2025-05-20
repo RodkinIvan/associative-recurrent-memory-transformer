@@ -148,12 +148,17 @@ parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer na
 parser.add_argument('--weight_decay', type=float, default=0.0, help='optimizer weight decay (default: 0.0)')
 parser.add_argument('--scale_parameter', action='store_true', default=False,
                     help='Adafactor scale_parameter (default: False)')
+                
 parser.add_argument('--relative_step', action='store_true', default=False,
                     help='Adafactor relative_step (default: False)')
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
-
+                    
 parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
+parser.add_argument('--predict_from_mask', action='store_true', default=False,
+                    help='Diables autoregressive generation')
+parser.add_argument('--input_rule', action='store_true', default=False, help='RO-S learning')
+
 
 from tqdm.auto import tqdm
 
@@ -202,6 +207,9 @@ if __name__ == '__main__':
     rule_left = None
     rule_right = None
 
+    # not allowed at the same time
+    assert not (args.learn_rule and args.input_rule)
+
     import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if args.model_type == 'decoder':
@@ -224,6 +232,9 @@ if __name__ == '__main__':
                         else:
                             batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids']
 
+                    if args.input_rule:
+                        batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
+
                     batch[i]['input_ids'] = batch[i]['input_ids'] + \
                         [sep_token if args.learn_rule else gen_token,] + \
                             b[f'input_ids_{steps-1}'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
@@ -244,6 +255,8 @@ if __name__ == '__main__':
 
                     else:
                         batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b[f'input_ids_{steps+shift-1}']
+
+                    
                     # assert not args.learn_rule
                 batch[i]['labels'] = batch[i]['input_ids'].copy()
                 batch[i]['attention_mask'] = [1 for _ in batch[i]['input_ids']] 
@@ -269,6 +282,7 @@ if __name__ == '__main__':
             return collated
     else:
         raise NotImplementedError(f'Unknown model type {args.model_type}')
+
 
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
     # get train dataset
@@ -403,9 +417,19 @@ if __name__ == '__main__':
             assert args.num_timesteps == args.num_test_timesteps
             def spliter(x):
                 assert x.size(1) == (args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1, f'{x.size(1)} != {(args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1}'
+                # print("INFO: ", x.size(1), block_size, args.num_timesteps, args.repeat_state, args.rule_len)
                 return [x[:, i*block_size:(i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size:],]
+            def spliter_input_rule(x):
+                # print(x[1])
+                # print("INFO: ", x.size(1), block_size, args.num_timesteps, args.repeat_state, args.rule_len)
+
+                assert x.size(1) == args.rule_len + (args.num_timesteps + 1 - args.repeat_state) * block_size, f'{x.size(1)} != {args.rule_len + 1 + (args.num_timesteps + 1 - args.repeat_state) * block_size+ 1}'
+                return [x[:, 0:args.rule_len]] + [x[:, args.rule_len + i*block_size:args.rule_len + (i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state - 1)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size + args.rule_len:],]
+            
             if args.learn_rule:
                 model.split_tensor = spliter
+            if args.input_rule:
+                model.split_tensor = spliter_input_rule
         
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 export CUDA_VISIBLE_DEVICES=0,1
-NP=2 # ./test_bert_sparse_pretrain_train_valid.sh
+NP=2 #$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
 cd ../..
-export WANDB_PROJECT=gpt_neox
+export WANDB_PROJECT=cellular_automata
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
@@ -14,36 +14,37 @@ RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:GPTNeoXForCausalLM
 
 DATASET_NAME=ca
-TASK_NAME=$DATASET_NAME
+TASK_NAME=ca_oo
 
 ITERS=40000
-TBS=512
+TBS=256
 
 MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
-SHIFTS=(4)
+SHIFTS=(1)
 LRS=(3e-4)      
-BSS=(256)
+BSS=(128)
 
-INPUT_TOKENS=231
+INPUT_TOKENS=1000
 N_HEADS=1
 
-DIM=128
+DIM=512
 NUM_LAYERS=4
+INTERMEDIATE_SIZE=3072
 
 MEMORY_SIZE=1
 D_MEM=1
 LAYERS_ATTR=gpt_neox.layers
 
-MAX_HOP=3
+MAX_HOP=4
 ACT_TYPE=layer
 
 cd base_models/gptconfigs
-python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
+python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS --intermediate_size $INTERMEDIATE_SIZE
 cd ../..
 MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
-for N in 5
+for N in 46 47 48
 do
 
 
@@ -75,10 +76,11 @@ MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29112 run_finetuning_cell_autom.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_gpt_neox_2.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
         --model_cfg $MODEL_CFG \
+        --dataset_name $DATASET_NAME \
         --memory_cell_cls $MEMORY_CELL \
         --recurrent_wrapper_cls $RECURRENT_WRAPPER \
         --model_cls $BACKBONE_CLS \
@@ -110,8 +112,9 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --max_hop $MAX_HOP \
         --act_type $ACT_TYPE \
         --freeze_mem \
-        --constant_depth \
-        --learn_rule
+        --act_format transformer \
+        --input_rule
+        # --validate_only
 done
 done
 done

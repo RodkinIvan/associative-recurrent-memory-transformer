@@ -11,7 +11,7 @@ default_config = {
   ],
   "model_type": "gpt_neox",
   "vocab_size": 128,
-  "hidden_size": 128, 
+  "hidden_size": 128,
   "num_hidden_layers": 1, 
   "num_attention_heads": 1, 
   "intermediate_size": 128, 

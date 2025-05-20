@@ -127,7 +127,10 @@ class ACT_constant_depth():
         step = 0
         # for l in range(self.num_layers):
         rest = None
+
+        
         while(step < max_hop):
+            print('constsant depth TRUE')
             # Add timing signal
             # state = state + time_enc[:, :inputs.shape[1], :].type_as(inputs.data)
             # state = state + pos_enc[:, step, :].unsqueeze(1).repeat(1,inputs.shape[1],1).type_as(inputs.data)
