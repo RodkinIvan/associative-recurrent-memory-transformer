@@ -1,19 +1,20 @@
 import os
 import json
 import argparse
-from pathlib import Path
 
-home = Path.home()
-save_folder = f"{home}/rmt/wip/base_models/gptconfigs/"
+save_folder = "."
+
+print(os.getcwd())
 default_config = {
   "architectures": [
-    "GPTNeoXForCausalLM"
+    "DoubleLSTMModel"
   ],
   "model_type": "gpt_neox",
-  "vocab_size": 128,
+  "embedding_dim": 8,
   "hidden_size": 128,
-  "num_hidden_layers": 1, 
-  "num_attention_heads": 1, 
+  "num_layers": 4,
+  "lr": 0.001,
+  "vocab_size": 128,
   "intermediate_size": 128, 
   "max_position_embeddings": 2048,
   "bos_token_id": 101,
@@ -28,25 +29,30 @@ default_config = {
   "layer_norm_eps": 1e-5,
   "use_cache": True,
   "tie_word_embeddings": False,
-  "use_parallel_residual": True
+  "use_parallel_residual": True,
+  "act_on": False,
+  "act_type": "layer",
+  "max_hop": 4,
+  "time_penalty": 3e-4,
+  "constant_depth": False
 }
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--hidden_size", default=128)
-parser.add_argument("--intermediate_size", default=128)
-parser.add_argument("--num_hidden_layers", default=1)
-parser.add_argument("--num_attention_heads", default=1)
+parser.add_argument("--num_layers", default=1)
+parser.add_argument("--embedding_dim", default=8)
+
+
 args = parser.parse_args()
 
 config = dict(**default_config)
 config['hidden_size'] = int(args.hidden_size)
-config['intermediate_size'] = int(args.intermediate_size)
-config['num_hidden_layers'] = int(args.num_hidden_layers)
-config['num_attention_heads'] = int(args.num_attention_heads)
+config['num_layers'] = int(args.num_layers)
+config['embedding_dim'] = int(args.embedding_dim)
 
-config_name = f"neox_tiny_{args.num_hidden_layers}l{args.num_attention_heads}hd{args.hidden_size}"
-print(f'Saving config {config_name}')
+config_name = f"lstm_{args.num_layers}ed{args.embedding_dim}hd{args.hidden_size}"
+
 save_path = os.path.join(save_folder, f'{config_name}.json')
-os.makedirs(save_folder, exist_ok=True)
+print(f'Saving config {config_name} \n {save_path}')
 with open(save_path, 'w') as f:
     json.dump(config, f)

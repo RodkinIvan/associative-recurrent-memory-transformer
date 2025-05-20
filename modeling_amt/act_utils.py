@@ -112,6 +112,51 @@ class ACT_basic(nn.Module):
             return (previous_state, *rest), (remainders, n_updates)
 
 
+class ACT_constant_depth():
+    def __init__(self):
+        super(ACT_constant_depth, self).__init__()
+
+    def __call__(self, *args, state, inputs, fn, time_enc, pos_enc, max_hop,  encoder_output=None, **kwargs):
+        # init_hdd
+        ## [B, S]
+        remainders = torch.zeros(inputs.shape[0],inputs.shape[1]).cuda()
+        ## [B, S]
+        n_updates = torch.zeros(inputs.shape[0],inputs.shape[1]).cuda()
+        ## [B, S, HDD]
+        previous_state = torch.zeros_like(inputs).cuda()
+        step = 0
+        # for l in range(self.num_layers):
+        rest = None
+
+        
+        while(step < max_hop):
+            print('constsant depth TRUE')
+            # Add timing signal
+            # state = state + time_enc[:, :inputs.shape[1], :].type_as(inputs.data)
+            # state = state + pos_enc[:, step, :].unsqueeze(1).repeat(1,inputs.shape[1],1).type_as(inputs.data)
+
+            if(encoder_output):
+                state, _ = fn((state,encoder_output))
+            else:
+                # apply transformation on the state
+                state = fn(state, *args, **kwargs)
+                if isinstance(state, tuple):
+                    rest = state[1:]
+                    state = state[0]
+            
+            # update running part in the weighted state and keep the rest
+            # print(state.shape, previous_state.shape, update_weights.shape)
+            # print(state.dtype, previous_state.dtype, update_weights.dtype)
+            previous_state = state
+            ## previous_state is actually the new_state at end of hte loop 
+            ## to save a line I assigned to previous_state so in the next 
+            ## iteration is correct. Notice that indeed we return previous_state
+            step+=1
+        if rest is None:
+            return previous_state, (remainders,n_updates)
+        else:
+            return (previous_state, *rest), (remainders, n_updates)
+
 class ACTForWholeARMT(nn.Module):
     def __init__(self,hidden_size):
         super(ACTForWholeARMT, self).__init__()
@@ -185,6 +230,53 @@ class ACTForWholeARMT(nn.Module):
 
             # update running part in the weighted state and keep the rest
             previous_state = ((state * update_weights.unsqueeze(-1)) + (previous_state * (1 - update_weights.unsqueeze(-1))))
+            ## previous_state is actually the new_state at end of hte loop 
+            ## to save a line I assigned to previous_state so in the next 
+            ## iteration is correct. Notice that indeed we return previous_state
+            step+=1
+        if rest is None:
+            return previous_state, (remainders,n_updates)
+        else:
+            return (previous_state, *rest), (remainders, n_updates)
+
+class ACTForWholeARMT_constant_depth():
+    def __init__(self):
+        super(ACTForWholeARMT_constant_depth, self).__init__()
+
+
+    def __call__(self, *args, state, inputs, fn_no_update, fn_update, time_enc, pos_enc, max_hop,  encoder_output=None, **kwargs):
+        print("\n\n\n\n\n\n\n\n\n\nCONSTANT DEPTH TRUE")
+        # init_hdd
+        ## [B, S]
+        remainders = torch.zeros(inputs.shape[0],inputs.shape[1]).cuda()
+        ## [B, S]
+        n_updates = torch.full((inputs.shape[0],inputs.shape[1]), max_hop).cuda()
+        ## [B, S, HDD]
+        previous_state = torch.zeros_like(inputs).cuda()
+        step = 0
+        # for l in range(self.num_layers):
+        rest = None
+        while(step < max_hop):
+            # Add timing signal
+            # state = state + time_enc[:, :inputs.shape[1], :].type_as(inputs.data)
+            # state = state + pos_enc[:, step, :].unsqueeze(1).repeat(1,inputs.shape[1],1).type_as(inputs.data)
+            if(encoder_output):
+                if (step < max_hop):
+                    state, _ = fn_no_update((state,encoder_output))
+                else:
+                    state, _ = fn_update((state, encoder_output))
+            else:
+                # apply transformation on the state
+                if (step < max_hop):
+                    state = fn_no_update(state, *args, **kwargs)
+                else:
+                    state = fn_update(state, *args, **kwargs)
+                if isinstance(state, tuple):
+                    rest = state[1:]
+                    state = state[0]
+
+            # update running part in the weighted state and keep the rest
+            previous_state = state
             ## previous_state is actually the new_state at end of hte loop 
             ## to save a line I assigned to previous_state so in the next 
             ## iteration is correct. Notice that indeed we return previous_state

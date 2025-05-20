@@ -1,58 +1,54 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=1
-NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
+export CUDA_VISIBLE_DEVICES=0,1
+NP=2 # ./test_bert_sparse_pretrain_train_valid.sh
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
 cd ../..
-export WANDB_PROJECT=cellular_automata
+export WANDB_PROJECT=gpt_neox
+
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
-TASK_NAME=CA
 MODEL_TYPE=decoder
 MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
 RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:GPTNeoXForCausalLM
 
-DATASET_PATH=irodkin/1dCA_r2s20T20
+DATASET_NAME=ca
+TASK_NAME=$DATASET_NAME
 
 ITERS=40000
-TBS=256
+TBS=512
 
 MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
-SHIFTS=(3)
-LRS=(3e-4)
+SHIFTS=(2)
+LRS=(3e-4)      
 BSS=(256)
 
-MEMORY_SIZE=1
-INPUT_TOKENS=1000
-D_MEM=1
+INPUT_TOKENS=231
 N_HEADS=1
 
-ACT_TYPE=layer
-MAX_HOP=4
-
 DIM=128
-N_ATTN_HEADS=4
-NUMS_LAYERS=(10)
+NUM_LAYERS=4
 
+MEMORY_SIZE=1
+D_MEM=1
+LAYERS_ATTR=gpt_neox.layers
 
+MAX_HOP=2
+ACT_TYPE=layer
 
-
-for N in 30
-do
-
-for SHIFT in ${SHIFTS[@]}
-do
-
-for (( j=0; j<${#NUMS_LAYERS[@]}; j++ ))
-do
-
-NUM_LAYERS=${NUMS_LAYERS[j]}
 cd base_models/gptconfigs
-python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $N_ATTN_HEADS
+python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
 cd ../..
-MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${N_ATTN_HEADS}hd${DIM}.json
+MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
+
+for N in 5
+do
+
+
+for (( j=0; j<${#MAX_N_SEGMENTSS[@]}; j++ ))
+do
 
 MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j]}
 MAX_VAL_SEGMENTS=${MAX_VAL_SEGMENTSS[j]}
@@ -62,6 +58,7 @@ INPUT_SEQ_LEN=$(((INPUT_SIZE)*MAX_N_SEGMENTS))
 TGT_LEN=$INPUT_SEQ_LEN
 LR_=${LRS[j]}
 VAL_SEQ_LEN=$(((INPUT_SIZE)*MAX_VAL_SEGMENTS))
+SHIFT=${SHIFTS[j]}
 
 BS=${BSS[j]}
 K2=-1
@@ -74,23 +71,15 @@ do
 for LR in $LR_
 do
 
-# if [[ j -gt 0 ]]
-# then
-#     PREV_SEQ_LEN=$(((INPUT_SIZE)*${MAX_N_SEGMENTSS[j-1]}))
-#     MODEL_CPT=../runs/lm_long/armt/${TASK_NAME}/$MODEL_NAME/lr${LRS[j-1]}_${SCHEDULER}_dmem${D_MEM}_${PREV_SEQ_LEN}-${MAX_N_SEGMENTSS[j-1]}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N 
-# else
-#     MODEL_CPT=None
-# fi
 MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_cell_autom.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29405 run_finetuning_gpt_neox.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_${NUM_LAYERS}dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act${ACT_TYPE}_shift${SHIFT}/run_$N \
+        --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
         --model_cfg $MODEL_CFG \
-        --dataset_path $DATASET_PATH \
-        --model_type $MODEL_TYPE \
+        --dataset_name $DATASET_NAME \
         --memory_cell_cls $MEMORY_CELL \
         --recurrent_wrapper_cls $RECURRENT_WRAPPER \
         --model_cls $BACKBONE_CLS \
@@ -98,7 +87,6 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --segment_size $INPUT_TOKENS \
         --input_size $INPUT_SIZE \
         --max_n_segments $MAX_N_SEGMENTS \
-        --num_mem_tokens $MEMORY_SIZE \
         --num_timesteps $MAX_N_SEGMENTS \
         --num_test_timesteps $MAX_VAL_SEGMENTS \
         --prediction_shift $SHIFT \
@@ -112,18 +100,18 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --data_n_workers 2 \
         --log_interval 50 --valid_interval 250 \
         --show_valid_examples 5 \
-        --early_stopping_patience 300000 \
+        --early_stopping_patience 10000 \
         --seed $(($N+42*$j)) \
-        --clip_grad_value 0.5 \
+        --clip_grad_value 1.0 \
         --save_best \
         --d_mem $D_MEM \
-        --layers_attr gpt_neox.layers \
-        --freeze_mem
-        # --act_on \
-        # --max_hop $MAX_HOP \
-        # --time_penalty 3e-4 \
-        # --act_type $ACT_TYPE \
-done
+        --layers_attr $LAYERS_ATTR \
+        --num_mem_tokens $MEMORY_SIZE \
+        --act_on \
+        --max_hop $MAX_HOP \
+        --act_type $ACT_TYPE \
+        --freeze_mem \
+        --constant_depth
 done
 done
 done

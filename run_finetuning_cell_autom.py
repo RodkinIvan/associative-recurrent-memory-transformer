@@ -57,7 +57,6 @@ parser.add_argument('--report_to', type=str, default='wandb', help='')
 parser.add_argument('--validate_only', action='store_true', default=False,
                     help='Skip training and run only validation. (default: False)')
 
-parser.add_argument('--grad_cp',action='store_true', default=False, help='enable gradient_checkpointing')
 parser.add_argument('--noisy_halting', action='store_true', default=False,
                     help='add noise to halting')
 parser.add_argument('--output_last_segment_only', action='store_true', default=False,
@@ -99,9 +98,9 @@ parser.add_argument('--repeat_state', action='store_true', default=False,
                     help='repeat state in the input so the input look like: [s0, s1, s1, s2, s2, s3...]')
 
 parser.add_argument('--learn_rule', action='store_true', default=False,
-                    help='learn rule during the training')
-parser.add_argument('--input_rule', action='store_true', default=False,
-                    help='input rule during the training')
+                    help='O-RS training')
+parser.add_argument('--rule_last', action='store_true', default=False,
+                    help='O-SR training')
 
 parser.add_argument('--dataset_path', type=str, default="irodkin/1dCA_r2s20T20", help="path to saved datasets")
 parser.add_argument('--segment_size', type=int, default=128, help='number of useful tokens in a segment')
@@ -133,22 +132,7 @@ parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of 
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
 parser.add_argument('--vary_n_segments', action='store_true', default=False, help='Randomly choose segment number from 1 to max_n_segments')
 parser.add_argument('--segment_alignment', type=str, default=None, help="How to align segments when splitting input")
-# parser.add_argument('--sum_loss', action='store_true', default=False,
-#                     help='with this flag task loss from all segments is summed')
-# parser.add_argument('--bptt_depth', type=int, default=-1, help='max number of previous segments in gradient computation.')
-# parser.add_argument('--segment_ordering', type=str, help='segment order', default='regular',
-#                     choices=['regular', 'reversed', 'bidirectional', 'repeat_first', 'last_memory_only'])
-# parser.add_argument('--memory_forward_func', type=str, help='path to memory forward funсtion script', default=None)
-# parser.add_argument('--memory_layers', type=str, help='memory-augmented layer inds or "all" for all layers', default=None)
-# parser.add_argument('--share_memory_layers', action='store_true', help='share weights of memory layers', default=False)
-# parser.add_argument('--reconstruction_loss_coef', type=float, default=None,
-#                     help='reconstuction loss ratio in total loss')
-# # parser.add_argument('--segment_ordering', type=str,help='????', default='regular',
-# #                     choices=['regular', 'reversed', 'bidirectional', 'repeat_first', 'last_memory_only'])
-# parser.add_argument('--retain_graph', action='store_true', help='Retain computation graph during backward pass', default=False)
-# parser.add_argument('--use_truncated_backward', action='store_true', default=False,
-#                     help='whether to use RMT truncated bptt method in backward')
-# parser.add_argument('--k1', type=int, default=-1, help='(not implemented) If not -1, gradient update is done each k1 segments')
+
 parser.add_argument('--k2', type=int, default=-1, help='number of last segments used by backward')
 parser.add_argument('--freeze_model_weights', action='store_true', default=False,
                     help='Stop training all model weights except memory layers')
@@ -164,15 +148,16 @@ parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer na
 parser.add_argument('--weight_decay', type=float, default=0.0, help='optimizer weight decay (default: 0.0)')
 parser.add_argument('--scale_parameter', action='store_true', default=False,
                     help='Adafactor scale_parameter (default: False)')
+                
 parser.add_argument('--relative_step', action='store_true', default=False,
                     help='Adafactor relative_step (default: False)')
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
+                    
+parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 parser.add_argument('--predict_from_mask', action='store_true', default=False,
                     help='Diables autoregressive generation')
-parser.add_argument('--generate_gen_token', action='store_true', default=False,
-                    help='Generate gen token')
-
+parser.add_argument('--input_rule', action='store_true', default=False, help='RO-S learning')
 
 
 from tqdm.auto import tqdm
@@ -222,13 +207,15 @@ if __name__ == '__main__':
     rule_left = None
     rule_right = None
 
+    # not allowed at the same time
+    assert not (args.learn_rule and args.input_rule)
+
     import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if args.model_type == 'decoder':
         block_size = (args.segment_size + 1) * (1 + args.repeat_state)
         sep_token, gen_token, eos_token = 100, 101, 102
         rule_token = 103
-        mask_token = 104
 
         def collate_fn(batch, valid=False):
             for i, b in enumerate(batch):
@@ -238,31 +225,39 @@ if __name__ == '__main__':
                     batch[i] = {
                         # concatenate input_ids_t for the corresponding steps
                         'input_ids': [i for t in range(steps-1) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}'] + [sep_token,] + b[f'input_ids_{t+1}']]
-                    }
+                    }                    
                     if args.learn_rule:
-                        batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids']
+                        if args.rule_last:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,]
+                        else:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids']
+
                     if args.input_rule:
                         batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
 
                     batch[i]['input_ids'] = batch[i]['input_ids'] + \
                         [sep_token if args.learn_rule else gen_token,] + \
                             b[f'input_ids_{steps-1}'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
+                    
+                    if args.learn_rule and args.rule_last:
+                        batch[i]['input_ids'] = batch[i]['input_ids'] + [sep_token,] + b['rule_ids']
 
                 else:
                     batch[i] = {
                         # concatenate input_ids_t for the corresponding steps
                         'input_ids': [i for t in range(steps) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}']]
                     }
-                    if args.input_rule:
-                        batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
                     if args.learn_rule:
-                        batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
+                        if args.rule_last:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] +  b[f'input_ids_{steps+shift-1}'] + [sep_token,] + b['rule_ids'] 
+                        else:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
+
                     else:
                         batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b[f'input_ids_{steps+shift-1}']
-                
-                if args.generate_gen_token:
-                    batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,]
 
+                    
+                    # assert not args.learn_rule
                 batch[i]['labels'] = batch[i]['input_ids'].copy()
                 batch[i]['attention_mask'] = [1 for _ in batch[i]['input_ids']] 
                 
@@ -270,12 +265,13 @@ if __name__ == '__main__':
             labels = torch.stack([torch.tensor(b['labels']) for b in batch], dim=0)
             if args.learn_rule:
                 input_ids[:, rule_left:rule_right] = rule_token
-            if args.predict_from_mask:
-                input_ids[:, left:] = mask_token
             attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
             
             labels_mask = torch.zeros_like(input_ids).bool()
-            labels_mask[:, -(args.array_size+1+(args.learn_rule)*(args.rule_len+1)+args.generate_gen_token):] = True
+            labels_mask[:, -(args.array_size+1+(args.learn_rule)*(args.rule_len+1)):] = True
+            # print(labels[0])
+            # print(input_ids[0])
+            # print('mask', labels_mask[0])
             collated = {'input_ids': input_ids,
                         'labels': labels, 
                         'attention_mask': attention_mask,
@@ -286,6 +282,7 @@ if __name__ == '__main__':
             return collated
     else:
         raise NotImplementedError(f'Unknown model type {args.model_type}')
+
 
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
     # get train dataset
@@ -299,11 +296,22 @@ if __name__ == '__main__':
 
         args.array_size = len(train_dataset[0]['input_ids_0'])
 
-    right = -args.generate_gen_token
-    left = -args.array_size - args.generate_gen_token
+    if args.learn_rule and args.rule_last:
+        right = -args.rule_len
+        left = -args.array_size - args.rule_len
+    else:
+        right = 0
+        left = -args.array_size
+
+   
     if args.learn_rule:
-        rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1) - args.generate_gen_token
-        rule_right = rule_left + args.rule_len
+        if args.rule_last:
+            rule_left = 11*(args.array_size + 1) + 1
+            rule_right = rule_left + args.rule_len
+        else:
+            rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1)
+            rule_right = rule_left + args.rule_len
+
 
     train_rnd_generator = torch.Generator()
     train_rnd_generator.manual_seed(args.seed)
@@ -326,28 +334,27 @@ if __name__ == '__main__':
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
+        if 'lstm' in args.model_path:
+            model_cfg = model_cfg.to_dict()
+            model_cfg['act_on'] = args.act_on
+            model_cfg['max_hop'] = args.max_hop
+            model_cfg['act_type'] = args.act_type
+            model_cfg['time_penalty'] = args.time_penalty
+            model_cfg['constant_depth'] = args.constant_depth
         model = model_cls(config=model_cfg)
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
-        model_args = dict()
-        if args.grad_cp:
-            model_args['grad_cp'] = args.grad_cp
-        model = model_cls.from_pretrained(args.from_pretrained, **model_args)
+        model = model_cls.from_pretrained(args.from_pretrained)
 
     # ## add [GEN] token
     # model.resize_token_embeddings(len(tokenizer))
     
     ## load cpt of backbone model
     if args.backbone_cpt:
-        # backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
-        # cpt = torch.load(backbone_cpt, map_location='cpu')
-        # model.load_state_dict(cpt['model_state_dict'])
-        # logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
-        import safetensors
-        model_cpt = os.path.join(args.backbone_cpt, "model_best/model.safetensors")
-        cpt = safetensors.torch.load_file(model_cpt)
-        w = model.load_state_dict(cpt, strict=True)
-        logger.info(f'loaded model with mis w {w}')
+        backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
+        cpt = torch.load(backbone_cpt, map_location='cpu')
+        model.load_state_dict(cpt['model_state_dict'])
+        logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
 
     # Pass memory settings to pretrained model
     if True:
@@ -374,6 +381,8 @@ if __name__ == '__main__':
                 mem_cell_args['act_format'] = args.act_format
             if args.noisy_halting:
                 mem_cell_args['noisy_halting'] = args.noisy_halting
+            if args.constant_depth:
+                mem_cell_args['constant_depth'] = args.constant_depth
 
 
         if args.num_mem_tokens is not None:
@@ -383,7 +392,7 @@ if __name__ == '__main__':
             mem_cell_args['layers_attr'] = args.layers_attr
         if args.no_denom:
             mem_cell_args['use_denom'] = not args.no_denom
-        if args.freeze_mem is not None:
+        if args.freeze_mem:
             mem_cell_args['freeze_mem'] = args.freeze_mem
 
         if args.no_correction:
@@ -408,24 +417,27 @@ if __name__ == '__main__':
             assert args.num_timesteps == args.num_test_timesteps
             def spliter(x):
                 assert x.size(1) == (args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1, f'{x.size(1)} != {(args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1}'
+                # print("INFO: ", x.size(1), block_size, args.num_timesteps, args.repeat_state, args.rule_len)
                 return [x[:, i*block_size:(i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size:],]
+            def spliter_input_rule(x):
+                # print(x[1])
+                # print("INFO: ", x.size(1), block_size, args.num_timesteps, args.repeat_state, args.rule_len)
+
+                assert x.size(1) == args.rule_len + (args.num_timesteps + 1 - args.repeat_state) * block_size, f'{x.size(1)} != {args.rule_len + 1 + (args.num_timesteps + 1 - args.repeat_state) * block_size+ 1}'
+                return [x[:, 0:args.rule_len]] + [x[:, args.rule_len + i*block_size:args.rule_len + (i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state - 1)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size + args.rule_len:],]
+            
             if args.learn_rule:
                 model.split_tensor = spliter
+            if args.input_rule:
+                model.split_tensor = spliter_input_rule
         
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':
-            
             model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
-            if os.path.exists(model_cpt):
-                cpt = torch.load(model_cpt, map_location='cpu')
-                model.load_state_dict(cpt)
-            else:
-                import safetensors
-                model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
-                cpt = safetensors.torch.load_file(model_cpt)
-                w = model.load_state_dict(cpt, strict=False)
-                logger.info(f'loaded model with mis w {w}')
-            logger.info(f'Loaded model state dict from: {args.model_cpt}')
+            cpt = torch.load(model_cpt, map_location='cpu')
+            model.load_state_dict(cpt)
+            logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+
     if args.freeze_model_weights:
         for n, p in model.named_parameters():
             # if 'memory' not in n and 'wte' not in n:
@@ -553,6 +565,10 @@ if __name__ == '__main__':
         fwd_kwargs['output_only_last_segment'] = True
     
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
+
+    fwd_kwargs = dict()
+    if 'armt' in args.model_path:
+        fwd_kwargs['output_only_last_segment'] = True
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
                       ###booydar

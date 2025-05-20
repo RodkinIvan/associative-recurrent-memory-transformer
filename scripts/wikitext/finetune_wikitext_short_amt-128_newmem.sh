@@ -8,8 +8,8 @@ CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 
 MODEL_TYPE=decoder
-MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
-RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
+MEMORY_CELL=modeling_amt.experimental.language_modeling:AssociativeMemoryCell
+RECURRENT_WRAPPER=modeling_amt.experimental.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:AutoModelForCausalLM
 # TEACHER_CLS=transformers:AutoModelForCausalLM
 TASK_NAME=wikitext-103-v1
@@ -31,7 +31,7 @@ N_HEADS=1
 
 
 
-for N in 2
+for N in 4
 do
 
 for MODEL_NAME in $MODEL
