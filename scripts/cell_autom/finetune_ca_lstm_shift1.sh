@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 NP=1 # ./test_bert_sparse_pretrain_train_valid.sh
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -48,9 +48,12 @@ MODEL_CFG=$pwd/base_models/configs/lstmconfigs/lstm_${NUM_LAYERS}ed${EMBED_DIM}h
 
 
 
-for N in 7
+for N in 14 15 16
 do
 
+
+for SHIFT in ${SHIFTS[@]}
+do
 
 for (( j=0; j<${#MAX_N_SEGMENTSS[@]}; j++ ))
 do
@@ -87,7 +90,7 @@ MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29502 run_finetuning_cell_autom.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29504 run_finetuning_cell_autom.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/lstm/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
         --model_cfg $MODEL_CFG \
@@ -113,12 +116,15 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --early_stopping_patience 15892245 \
         --seed $(($N+42*$j)) \
         --clip_grad_value 1.0 \
-        --save_best 
+        --save_best  \
+        --learn_rule \
+        --rule_last
         # --act_on \
         # --act_type $ACT_TYPE \
         # --max_hop $MAX_HOP  \
         # --time_penalty $TIME_PENALTY 
 
+done
 done
 done
 done

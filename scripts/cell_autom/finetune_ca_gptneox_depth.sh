@@ -18,11 +18,11 @@ DATASET_PATH=irodkin/1dCA_r2s20T20
 ITERS=40000
 TBS=256
 
-MAX_N_SEGMENTSS=(10 10 10 10 10 10 10)
-MAX_VAL_SEGMENTSS=(10 10 10 10 10 10 10)
-SHIFTS=(3 4)
-LRS=(3e-4 3e-4 3e-4 3e-4 3e-4 3e-4 3e-4)
-BSS=(256 256 256 256 256 256 256)
+MAX_N_SEGMENTSS=(10)
+MAX_VAL_SEGMENTSS=(10)
+SHIFTS=(3)
+LRS=(3e-4)
+BSS=(256)
 
 MEMORY_SIZE=1
 INPUT_TOKENS=1000
@@ -34,12 +34,12 @@ MAX_HOP=4
 
 DIM=128
 N_ATTN_HEADS=4
-NUMS_LAYERS=(5 6 7 8 9 10 11)
+NUMS_LAYERS=(10)
 
 
 
 
-for N in 10
+for N in 30
 do
 
 for SHIFT in ${SHIFTS[@]}
@@ -112,7 +112,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --data_n_workers 2 \
         --log_interval 50 --valid_interval 250 \
         --show_valid_examples 5 \
-        --early_stopping_patience 30 \
+        --early_stopping_patience 300000 \
         --seed $(($N+42*$j)) \
         --clip_grad_value 0.5 \
         --save_best \

@@ -11,9 +11,9 @@ from munch import Munch
 
 
 # PyTorch Lightning Module to train the Double LSTM
-class DoubleLSTMModel(nn.Module):
+class LSTMModel(nn.Module):
     def __init__(self, config):
-        super(DoubleLSTMModel, self).__init__()
+        super(LSTMModel, self).__init__()
 
         if isinstance(config, dict):
             self.config = config
@@ -39,13 +39,6 @@ class DoubleLSTMModel(nn.Module):
             self.lstm_layer = nn.ModuleList([nn.LSTM(self.embedding_dim, self.hidden_size, num_layers=self.num_layers, batch_first=True)])
         else:
             raise NotImplementedError
-
-        # self.lstm_layer = nn.LSTM(self.embedding_dim, self.hidden_size, num_layers=self.num_layers, batch_first=True)
-
-        # if self.act_on:
-        #     self.max_hop = self.config['max_hop']
-        #     for i in range(len(self.lstm_layer)):
-        #         self.lstm_layer[i] = AdaptiveLayerWrapper(self.lstm_layer[i], self.hidden_size, self.max_hop, self.constant_depth)
 
 
         self.fc = nn.Linear(self.hidden_size, self.vocab_size)
@@ -75,7 +68,6 @@ class DoubleLSTMModel(nn.Module):
 
 def main():
     """Main function to demonstrate the LSTM model functionality."""
-    import torch
     
     # Sample configuration
     config = {
@@ -89,7 +81,7 @@ def main():
     }
     
     # Create model instance
-    model = DoubleLSTMModel(config)
+    model = LSTMModel(config)
     
     # Create sample input
     batch_size = 2

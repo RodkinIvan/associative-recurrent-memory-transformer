@@ -9,7 +9,7 @@ CUDA_LAUNCH_BLOCKING=1
 MODEL_TYPE=decoder
 MEMORY_CELL=baselines.dummy.language_modeling:MemoryCell
 RECURRENT_WRAPPER=baselines.dummy.language_modeling:RecurrentWrapper
-BACKBONE_CLS=modeling_lstm.language_modeling:DoubleLSTMModel
+BACKBONE_CLS=modeling_lstm.language_modeling:LSTMModel
 
 
 DATASET_NAME=ca
