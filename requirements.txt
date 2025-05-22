@@ -1,7 +1,7 @@
 wandb
 transformers
 datasets
-accelerate==0.33.0
+accelerate
 deepspeed
 tensorboard
 munch

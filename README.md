@@ -1,32 +1,23 @@
-# Adaptive Computation Time Investigation
+# Beyond Memorization: Extending Reasoning Depth with Recurrence, Memory, and Test Time Compute Scaling
 
-This project explores the integration of [Adaptive Computation Time (ACT)](https://arxiv.org/pdf/1603.08983) into various sequential models, including LSTM, Transformers, [Universal Transformers (UT)](https://arxiv.org/pdf/1807.03819), [Mamba](https://arxiv.org/pdf/1807.03819), and [Associative Recurrent Memory Transformer (ARMT)](https://arxiv.org/pdf/2407.04841). The goal is to dynamically adjust computational steps based on input complexity, enhancing efficiency and performance on diverse tasks.
-
-
-## Datasets
+## Dataset
 
 We evaluate the models on the following datasets:
 
 | Dataset | Description | Train size | Val. size | Test size |
 | --- | --- | --- | --- | --- |
 | [1D Cellular Automata](https://huggingface.co/datasets/irodkin/1dCA_r2s20T20) | Predicts the next state of a 1D cellular automaton based on its current state | 950,000 | 50,000 | 100,000 |
-| [Binary Copy](https://huggingface.co/datasets/steeldream/binary) | Copies the input sequence to the output | 800,000 | 100,000 | 100,000 |
-| [Binary Reverse](https://huggingface.co/datasets/steeldream/binary) | Reverses the input sequence | 800,000 | 100,000 | 100,000 |
-| [Binary Addition](https://huggingface.co/datasets/steeldream/addition_binary) | Adds two binary numbers | 800,000 | 100,000 | 100,000 |
-
-We preprocess the Binary Copy, Reverse, and Addition datasets using the `collate_fn` function to define their respective tasks. For these datasets, we experimented with two approaches: (1) sampling input lengths to train on strings of varying sizes for better generalization, and (2) using fixed input lengths without sampling. For the Cellular Automata dataset, we evaluated multiple scenarios where the shift (number of look ahead steps) was set to 1, 2, 3, and 4.
+| 
 
 
 # Models
 
-We evaluated the following models on all datasets:
+We evaluated the following models on our dataset:
 
 1. LSTM
 2. Transformer
 3. Mamba
 4. ARMT
-
-Each model was evaluated both with ACT applied to each layer (LACT) and to the entire model (MACT). For the Copy and Reverse tasks, all models used a single layer, while for the Addition and Cellular Automata tasks, four layers were used. [GPT-Neox](https://huggingface.co/docs/transformers/model_doc/gpt_neox) was selected as the Transformer model and as the backbone for ARMT.
 
 ## Installation
 
@@ -54,6 +45,10 @@ For example, to train the Transformer model with one layer using LACT and withou
 
 ```bash
 cd scripts
-cd copy_binary
-bash finetune_gpt_neox_1l_act_no_sample.sh
+cd cell_autom
+bash finetune_ca_gptneox.sh
 ```
+
+Please explore script parameters before running.
+
+Other scripts from the paper are located in folders: `cell_autom`, `ca_grpo`, `ca_oo`, `ca_adaptive`.
