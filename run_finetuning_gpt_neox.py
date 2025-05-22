@@ -107,6 +107,7 @@ parser.add_argument('--relative_step', action='store_true', default=False,
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
 
+parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 
 if __name__ == '__main__':
     torch.autograd.set_detect_anomaly(True)
@@ -239,6 +240,7 @@ if __name__ == '__main__':
             return collated
         return addition_collate_fn
  
+
     def ca_collate_fn(batch, sample_length=False, array_size=args.valid_array_size, valid=False):
         for i, b in enumerate(batch):
             steps = args.num_test_timesteps if valid else args.num_timesteps
@@ -290,6 +292,9 @@ if __name__ == '__main__':
     per_worker_batch_size = args.batch_size * args.gradient_accumulation_steps
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
 
+
+
+
     if args.dataset_name == 'ca':
         train_dataloader = DataLoader(
             train_dataset, batch_size=per_worker_batch_size, generator=train_rnd_generator,
@@ -331,6 +336,14 @@ if __name__ == '__main__':
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
+
+        if 'lstm' in args.model_path:
+            model_cfg = model_cfg.to_dict()
+            model_cfg['act_on'] = args.act_on
+            model_cfg['max_hop'] = args.max_hop
+            model_cfg['act_type'] = args.act_type
+            model_cfg['time_penalty'] = args.time_penalty
+
         model = model_cls(config=model_cfg)
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
@@ -356,9 +369,12 @@ if __name__ == '__main__':
     if args.act_on:
         mem_cell_args['act_on'] = args.act_on
         mem_cell_args['max_hop'] = args.max_hop
-        mem_cell_args['act_format'] = args.act_format
+        if args.act_format is not None:
+            mem_cell_args['act_format'] = args.act_format
         if args.act_type is not None:
             mem_cell_args['act_type'] = args.act_type
+        if args.constant_depth:
+            mem_cell_args['constant_depth'] = args.constant_depth
 
     if args.num_mem_tokens is not None:
         mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
@@ -510,4 +526,4 @@ if __name__ == '__main__':
         else:
             raise "No valid dataset"
 
-    print('Done!')
+    print('Done!') 

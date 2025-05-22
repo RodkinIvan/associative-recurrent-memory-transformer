@@ -99,9 +99,12 @@ parser.add_argument('--repeat_state', action='store_true', default=False,
                     help='repeat state in the input so the input look like: [s0, s1, s1, s2, s2, s3...]')
 
 parser.add_argument('--learn_rule', action='store_true', default=False,
-                    help='learn rule during the training')
+                    help='O-RS training')
 parser.add_argument('--input_rule', action='store_true', default=False,
                     help='input rule during the training')
+
+parser.add_argument('--rule_last', action='store_true', default=False,
+                    help='O-SR training')
 
 parser.add_argument('--dataset_path', type=str, default="irodkin/1dCA_r2s20T20", help="path to saved datasets")
 parser.add_argument('--segment_size', type=int, default=128, help='number of useful tokens in a segment')
@@ -164,10 +167,13 @@ parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer na
 parser.add_argument('--weight_decay', type=float, default=0.0, help='optimizer weight decay (default: 0.0)')
 parser.add_argument('--scale_parameter', action='store_true', default=False,
                     help='Adafactor scale_parameter (default: False)')
+                
 parser.add_argument('--relative_step', action='store_true', default=False,
                     help='Adafactor relative_step (default: False)')
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
+                    
+parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 parser.add_argument('--predict_from_mask', action='store_true', default=False,
                     help='Diables autoregressive generation')
 parser.add_argument('--generate_gen_token', action='store_true', default=False,
@@ -222,6 +228,9 @@ if __name__ == '__main__':
     rule_left = None
     rule_right = None
 
+    # not allowed at the same time
+    assert not (args.learn_rule and args.input_rule)
+
     import os
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     if args.model_type == 'decoder':
@@ -240,13 +249,20 @@ if __name__ == '__main__':
                         'input_ids': [i for t in range(steps-1) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}'] + [sep_token,] + b[f'input_ids_{t+1}']]
                     }
                     if args.learn_rule:
-                        batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids']
+                        if args.rule_last:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,]
+                        else:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids']
+
                     if args.input_rule:
                         batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
 
                     batch[i]['input_ids'] = batch[i]['input_ids'] + \
                         [sep_token if args.learn_rule else gen_token,] + \
                             b[f'input_ids_{steps-1}'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
+                    
+                    if args.learn_rule and args.rule_last:
+                        batch[i]['input_ids'] = batch[i]['input_ids'] + [sep_token,] + b['rule_ids']
 
                 else:
                     batch[i] = {
@@ -256,7 +272,11 @@ if __name__ == '__main__':
                     if args.input_rule:
                         batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
                     if args.learn_rule:
-                        batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
+                        if args.rule_last:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] +  b[f'input_ids_{steps+shift-1}'] + [sep_token,] + b['rule_ids'] 
+                        else:
+                            batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b['rule_ids'] + [sep_token,] + b[f'input_ids_{steps+shift-1}']
+
                     else:
                         batch[i]['input_ids'] = batch[i]['input_ids'] + [gen_token,] + b[f'input_ids_{steps+shift-1}']
                 
@@ -287,6 +307,7 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError(f'Unknown model type {args.model_type}')
 
+
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
     # get train dataset
     logger.info(f'preparing dataset for: {args.task_name}')
@@ -299,11 +320,22 @@ if __name__ == '__main__':
 
         args.array_size = len(train_dataset[0]['input_ids_0'])
 
-    right = -args.generate_gen_token
-    left = -args.array_size - args.generate_gen_token
+    if args.learn_rule and args.rule_last:
+        right = -args.rule_len
+        left = -args.array_size - args.rule_len
+    else:
+        right = -args.generate_gen_token
+        left = -args.array_size - args.generate_gen_token
+
+   
     if args.learn_rule:
-        rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1) - args.generate_gen_token
-        rule_right = rule_left + args.rule_len
+        if args.rule_last:
+            rule_left = (args.num_timesteps + 1)*(args.array_size + 1) + 1
+            rule_right = rule_left + args.rule_len
+        else:
+            rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1) - args.generate_gen_token
+            rule_right = rule_left + args.rule_len
+
 
     train_rnd_generator = torch.Generator()
     train_rnd_generator.manual_seed(args.seed)
@@ -326,6 +358,13 @@ if __name__ == '__main__':
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
+        if 'lstm' in args.model_path:
+            model_cfg = model_cfg.to_dict()
+            model_cfg['act_on'] = args.act_on
+            model_cfg['max_hop'] = args.max_hop
+            model_cfg['act_type'] = args.act_type
+            model_cfg['time_penalty'] = args.time_penalty
+            model_cfg['constant_depth'] = args.constant_depth
         model = model_cls(config=model_cfg)
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
@@ -374,6 +413,8 @@ if __name__ == '__main__':
                 mem_cell_args['act_format'] = args.act_format
             if args.noisy_halting:
                 mem_cell_args['noisy_halting'] = args.noisy_halting
+            if args.constant_depth:
+                mem_cell_args['constant_depth'] = args.constant_depth
 
 
         if args.num_mem_tokens is not None:
@@ -409,8 +450,14 @@ if __name__ == '__main__':
             def spliter(x):
                 assert x.size(1) == (args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1, f'{x.size(1)} != {(args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1}'
                 return [x[:, i*block_size:(i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size:],]
+            def spliter_input_rule(x):
+                assert x.size(1) == args.rule_len + (args.num_timesteps + 1 - args.repeat_state) * block_size, f'{x.size(1)} != {args.rule_len + 1 + (args.num_timesteps + 1 - args.repeat_state) * block_size+ 1}'
+                return [x[:, 0:args.rule_len]] + [x[:, args.rule_len + i*block_size:args.rule_len + (i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state - 1)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size + args.rule_len:],]
+            
             if args.learn_rule:
                 model.split_tensor = spliter
+            if args.input_rule:
+                model.split_tensor = spliter_input_rule
         
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':
@@ -553,6 +600,10 @@ if __name__ == '__main__':
         fwd_kwargs['output_only_last_segment'] = True
     
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
+
+    fwd_kwargs = dict()
+    if 'armt' in args.model_path:
+        fwd_kwargs['output_only_last_segment'] = True
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
                       ###booydar
