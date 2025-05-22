@@ -324,16 +324,16 @@ if __name__ == '__main__':
         right = -args.rule_len
         left = -args.array_size - args.rule_len
     else:
-        right = 0
-        left = -args.array_size
+        right = -args.generate_gen_token
+        left = -args.array_size - args.generate_gen_token
 
    
     if args.learn_rule:
         if args.rule_last:
-            rule_left = 11*(args.array_size + 1) + 1
+            rule_left = (args.num_timesteps + 1)*(args.array_size + 1) + 1
             rule_right = rule_left + args.rule_len
         else:
-            rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1)
+            rule_left = -(2 * args.array_size + 2 + args.rule_len) + (1 - args.repeat_state) * (args.array_size + 1) - args.generate_gen_token
             rule_right = rule_left + args.rule_len
 
 
