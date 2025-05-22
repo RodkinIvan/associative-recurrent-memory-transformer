@@ -110,6 +110,10 @@ parser.add_argument('--num_predict', type=int, default=4, help='number of predic
 parser.add_argument('--cot_setting', action='store_true', default=False, help='use CoT')
 parser.add_argument('--learn_rule', action='store_true', default=False,
                     help='learn rule')
+parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
+parser.add_argument('--input_rule', action='store_true', default=False, help='RO-S learning')
+
+
 
 if __name__ == '__main__':
     torch.autograd.set_detect_anomaly(True)
@@ -176,7 +180,8 @@ if __name__ == '__main__':
                 if args.repeat_state:
                     input_ids_seq += [sep_token] + b[f'input_ids_{t+1}']
             
-            
+            if args.input_rule:
+                input_ids_seq = b['rule_ids'] + input_ids_seq
             if args.learn_rule:
                 input_ids_seq += [gen_token] + b['rule_ids']
             if args.repeat_state:
@@ -362,8 +367,11 @@ if __name__ == '__main__':
         mem_cell_args['max_hop'] = args.max_hop
         if args.act_type is not None:
             mem_cell_args['act_type'] = args.act_type
+        if args.constant_depth:
+            mem_cell_args['constant_depth'] = args.constant_depth
         if args.act_format is not None:
             mem_cell_args['act_format'] = args.act_format
+
     if args.num_mem_tokens is not None:
         mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
         mem_cell_args['wrap_pos'] = args.wrap_pos
