@@ -9,13 +9,13 @@ CUDA_LAUNCH_BLOCKING=1
 MODEL_TYPE=decoder
 MEMORY_CELL=baselines.dummy.language_modeling:MemoryCell
 RECURRENT_WRAPPER=baselines.dummy.language_modeling:RecurrentWrapper
-BACKBONE_CLS=modeling_lstm.language_modeling:DoubleLSTMModel
+BACKBONE_CLS=modeling_lstm.language_modeling:LSTMModel
 
 
 # DATASET_NAME=ca
-DATASET_NAME=addition_binary
+# DATASET_NAME=addition_binary
 # DATASET_NAME=reverse_binary
-# DATASET_NAME=copy_binary
+DATASET_NAME=copy_binary
 
 export WANDB_PROJECT=$DATASET_NAME
 TASK_NAME=$DATASET_NAME
@@ -37,7 +37,7 @@ INPUT_TOKENS=40
 
 DIM=128
 EMBED_DIM=128
-NUM_LAYERS=4
+NUM_LAYERS=1
 
 cd base_models/configs/lstmconfigs
 python create_config.py --hidden_size $DIM --num_layers $NUM_LAYERS --embedding_dim $EMBED_DIM
@@ -87,7 +87,7 @@ MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29507 run_finetuning_gpt_neox.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29501 run_finetuning_gpt_neox.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/lstm/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
         --model_cfg $MODEL_CFG \
