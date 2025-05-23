@@ -6,8 +6,8 @@ with open('requirements-lm-tools.txt') as fp:
 setup(name='lm_experiments_tools',
       version='0.8.0',
       description='Tools for training language models with HF compatible interface.',
-      author='Yura Kuratov',
-      author_email='yurakuratov@gmail.com',
+      author='XXXX XXXX',
+      author_email='XXXXXXXX@gmail.com',
       packages=['lm_experiments_tools'],
       install_requires=install_requires
       )

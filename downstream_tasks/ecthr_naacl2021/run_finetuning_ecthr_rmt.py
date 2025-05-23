@@ -72,7 +72,7 @@ parser.add_argument('--model_type', type=str, default='encoder-decoder',
                          '(default: encoder-decoder)')
 
 
-# Aydar # RMT args
+# XXXX # RMT args
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
@@ -243,7 +243,7 @@ def main():
             logger.info(f'Loading pretrained model: {args.from_pretrained}')
         model = model_cls.from_pretrained(args.from_pretrained)
 
-    # Aydar # Pass memory settings to pretrained model
+    # XXXX # Pass memory settings to pretrained model
     if args.num_mem_tokens is not None:
         rmt_config = {
             'num_mem_tokens': args.num_mem_tokens,
@@ -313,7 +313,7 @@ def main():
             metrics['recall'] = recall_score(y, p)
         return metrics
 
-    ## booydar
+    ## XXXX
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
     trainer = Trainer(args, model, optimizer, train_dataloader, valid_dataloader, train_sampler,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,

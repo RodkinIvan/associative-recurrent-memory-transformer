@@ -88,7 +88,7 @@ parser.add_argument('--key_size', type=int, default=None, help='number of digits
 parser.add_argument('--value_size', type=int, default=None, help='number of digits in values')
 parser.add_argument('--num_pairs', type=int, default=None, help='number of key-value pairs in sample')
 parser.add_argument('--num_test_pairs', type=int, default=None, help='number of key-value pairs in test sample')
-parser.add_argument('--dataset_path', type=str, default="/home/jovyan/rmt/datasets/associative_retrieval/", help="path to saved datasets")
+parser.add_argument('--dataset_path', type=str, default="/home/XXXX/rmt/datasets/associative_retrieval/", help="path to saved datasets")
 parser.add_argument('--train_size', type=int, default=10000, help='number of samples in train split')
 parser.add_argument('--valid_size', type=int, default=1000, help='number of samples in validation split')
 parser.add_argument('--test_size', type=int, default=2000, help='number of samples in test split')
@@ -102,7 +102,7 @@ parser.add_argument('--no_denom', action='store_true', default=False,
 parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
-# Aydar # RMT args 
+# XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
@@ -484,7 +484,7 @@ if __name__ == '__main__':
             #     data['generation_outputs'] = [data['generation_outputs'][i, mask] for i, mask in enumerate(batch['labels_mask'])]
         # if args.model_type == 'encoder':
             
-            ##### booydar
+            ##### XXXX
             # data['predictions'] = torch.argmax(output['logits'].detach(), dim=-1)
         # data['labels'] = batch['labels']
         for key in batch.keys():
@@ -561,11 +561,11 @@ if __name__ == '__main__':
     model, optimizer, train_dataloader, valid_dataloader, test_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, valid_dataloader, None)
 
-    ### booydar
+    ### XXXX
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
-                      ###booydar
+                      ###XXXX
                       batch_metrics_fn=batch_metrics_fn,
                       generate_kwargs={
                           'max_new_tokens': int(args.value_size * 2),

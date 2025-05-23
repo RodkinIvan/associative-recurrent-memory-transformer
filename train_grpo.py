@@ -10,9 +10,9 @@ torch.cuda.empty_cache()
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Load dataset splits
-train_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="train")
-val_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="validation")
-test_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="test")
+train_dataset = load_dataset("XXXX/1dCA_r2s20T20", split="train")
+val_dataset = load_dataset("XXXX/1dCA_r2s20T20", split="validation")
+test_dataset = load_dataset("XXXX/1dCA_r2s20T20", split="test")
 
 # Pick a tokenizer that matches your model
 model_name = "facebook/opt-350m"

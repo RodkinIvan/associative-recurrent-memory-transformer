@@ -47,8 +47,8 @@ echo gradient accumulation steps $GRAD_ACC_STEPS
 accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29701 run_finetuning_babilong_rmt.py \
         --task_dataset $TASK_DATASET \
         --noise_dataset $NOISE_DATASET \
-        --babi_path /home/rodkin/lab/t5-experiments/data/tasks_1-20_v1-2/en-10k \
-        --model_path /home/rodkin/runs/babilong/${TASK_DATASET}/rmt/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
+        --babi_path /home/XXXX/lab/t5-experiments/data/tasks_1-20_v1-2/en-10k \
+        --model_path /home/XXXX/runs/babilong/${TASK_DATASET}/rmt/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --memory_cell_cls $MEMORY_CELL \
@@ -74,6 +74,6 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29701 run_fine
         --seed $(($N+42)) \
         --clip_grad_norm 1.0 \
         --d_mem $D_MEM \
-	--model_cpt /home/jovyan/armt/runs/babilong/qa1_single-supporting-fact/rmt/gpt2/lr1e-04_linear_adamw_wd1e-03_32x512_mem10_bs64_bptt--1/run_1
+	--model_cpt /home/XXXX/armt/runs/babilong/qa1_single-supporting-fact/rmt/gpt2/lr1e-04_linear_adamw_wd1e-03_32x512_mem10_bs64_bptt--1/run_1
 done
 echo "done"

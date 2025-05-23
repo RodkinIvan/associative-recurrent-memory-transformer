@@ -33,7 +33,7 @@ LRS=(1e-4)
 BSS=(4)
 
 
-MODEL_NAME=/mnt/data/users/ivan.rodkin/lab/rwkv-x060-173m-pile-20240515-ctx4k.pth
+MODEL_NAME=/mnt/data/users/XXXX.XXXX/lab/rwkv-x060-173m-pile-20240515-ctx4k.pth
 TOKENIZER=EleutherAI/pythia-160m
 MEMORY_SIZE=4
 INPUT_TOKENS=128

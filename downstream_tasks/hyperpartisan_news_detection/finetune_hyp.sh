@@ -15,7 +15,7 @@ BS=4 # batch size per gpu, * grad_acc_steps
 SRC_LEN=512
 WD=1e-03
 
-DATA_PATH=/home/kuratov/data/hyperpartisan_news_detection
+DATA_PATH=/home/XXXX/data/hyperpartisan_news_detection
 
 for (( i=0; i<${#MODEL_NAMES[@]}; i++ ))
 do

@@ -998,7 +998,7 @@ class RMTDecoderXLCache(RMTDecoderLMHeadMultiSeg):
 
 import os
 import pickle
-def save_tensor(tensor, folder='/home/jovyan/rmt/losses_dump/losses/', id=-1):
+def save_tensor(tensor, folder='/home/XXXX/rmt/losses_dump/losses/', id=-1):
     path = os.path.join(folder, f'{id}.pickle')
     with open(path, 'wb') as handle:
         pickle.dump(tensor, handle)
@@ -1034,8 +1034,8 @@ class RMTDecoderSaveLoss(RMTDecoderLMHeadMultiSeg):
             loss = loss_fct(flat_logits, flat_labels)
             rmt_out['loss'] = loss.mean()
 
-            save_tensor(shift_mask[:, -self.segment_size:], '/home/jovyan/rmt/losses_dump/masks/', self.batch_id)
-            save_tensor(loss.reshape(shift_mask.shape[0], -1)[:, -self.segment_size:], '/home/jovyan/rmt/losses_dump/losses/', self.batch_id)
+            save_tensor(shift_mask[:, -self.segment_size:], '/home/XXXX/rmt/losses_dump/masks/', self.batch_id)
+            save_tensor(loss.reshape(shift_mask.shape[0], -1)[:, -self.segment_size:], '/home/XXXX/rmt/losses_dump/losses/', self.batch_id)
             self.batch_id += 1
 
         rmt_out['logits'] = full_logits

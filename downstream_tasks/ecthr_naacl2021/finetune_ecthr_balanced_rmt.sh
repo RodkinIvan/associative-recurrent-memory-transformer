@@ -19,7 +19,7 @@ ITERS=3200
 
 PATIENCE=15
 
-DATA_PATH=/home/jovyan/data/ecthr_naacl2021/dataset
+DATA_PATH=/home/XXXX/data/ecthr_naacl2021/dataset
 
 # RMT
 INPUT_SIZE=512  # segment length

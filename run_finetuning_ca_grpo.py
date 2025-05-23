@@ -45,7 +45,7 @@ parser = HfArgumentParser([])
 parser.add_argument("--task_name", type=str, default="CA_GRPO", help="Task name")
 parser.add_argument("--model_path", type=str, required=True, help="Path where model & metrics are saved")
 parser.add_argument("--model_cfg", type=str, required=True, help="Path to model configuration file")
-parser.add_argument("--dataset_path", type=str, default="irodkin/1dCA_r2s20T20", help="Dataset path")
+parser.add_argument("--dataset_path", type=str, default="XXXX/1dCA_r2s20T20", help="Dataset path")
 parser.add_argument("--model_type", type=str, default="decoder", help="Model type (e.g., decoder)")
 parser.add_argument("--memory_cell_cls", type=str, required=True, help="Memory cell class for RMT")
 parser.add_argument("--recurrent_wrapper_cls", type=str, required=True, help="Wrapper class for RMT")
@@ -176,7 +176,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
     logger.info(f"Preparing dataset for: {args.task_name}")
     with accelerator.main_process_first():
-        train_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="train")
+        train_dataset = load_dataset("XXXX/1dCA_r2s20T20", split="train")
         args.rule_len = len(train_dataset[0]["rule_ids"])
         logger.info(f"Rule len: {args.rule_len}")
         valid_dataset = load_dataset(args.dataset_path, split="validation")

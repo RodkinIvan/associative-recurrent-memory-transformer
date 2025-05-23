@@ -89,7 +89,7 @@ parser.add_argument('--model_type', type=str, default='encoder-decoder',
 parser.add_argument('--infctx_p', type=float, default=0.0, help='probability of substituting the starting state from the random batch')
 parser.add_argument('--alpha_distil', type=float, default=None, help='')
 
-# Aydar # RMT args
+# XXXX # RMT args
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--block_size', type=int, default=None, help='number of real tokens in block')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
@@ -229,7 +229,7 @@ if __name__ == '__main__':
             )
         elif 'arxiv' in args.task_name:
             # from datasets import load_from_disk
-            tokenized_datasets = datasets.load_from_disk('/home/bulatov/bulatov/datasets/arxiv_pile/processed/')
+            tokenized_datasets = datasets.load_from_disk('/home/XXXX/XXXX/datasets/arxiv_pile/processed/')
         else:
             raise ValueError(f"Unknown dataset {args.task_name}")
 
@@ -566,7 +566,7 @@ if __name__ == '__main__':
     model, optimizer, train_dataloader, valid_dataloader, test_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, valid_dataloader, test_dataloader)
 
-    ### booydar
+    ### XXXX
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,  # train_sampler,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,

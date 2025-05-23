@@ -96,7 +96,7 @@ parser.add_argument('--model_type', type=str, default='decoder',
 # Dataset args
 parser.add_argument('--length', type=int, default=10, help='number of group elements in a sequence')
 
-parser.add_argument('--dataset_path', type=str, default="irodkin/groupmul_A5_split")
+parser.add_argument('--dataset_path', type=str, default="XXXX/groupmul_A5_split")
 parser.add_argument('--num_samples', type=int, default=100000, help='number of samples in a dataset')
 parser.add_argument('--segment_size', type=int, default=128, help='number of useful tokens in a segment')
 parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
@@ -118,7 +118,7 @@ parser.add_argument('--freeze_mem', action='store_true', default=False,
 parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
-# Aydar # RMT args 
+# XXXX # RMT args 
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
 parser.add_argument('--vary_n_segments', action='store_true', default=False, help='Randomly choose segment number from 1 to max_n_segments')
@@ -362,7 +362,7 @@ if __name__ == '__main__':
             #     data['generation_outputs'] = [data['generation_outputs'][i, mask] for i, mask in enumerate(batch['labels_mask'])]
         # if args.model_type == 'encoder':
             
-        ##### booydar
+        ##### XXXX
         data['predictions'] = torch.argmax(output['logits'].detach(), dim=-1)
         # data['labels'] = batch['labels']
         for key in batch.keys():
@@ -418,7 +418,7 @@ if __name__ == '__main__':
     model, optimizer, train_dataloader, valid_dataloader, test_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, valid_dataloader, None)
 
-    ### booydar
+    ### XXXX
 
     fwd_kwargs = dict()
     if args.output_last_segment_only:
@@ -427,7 +427,7 @@ if __name__ == '__main__':
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
-                      ###booydar
+                      ###XXXX
                       batch_metrics_fn=batch_metrics_fn,
                       stop_metric_condition=lambda m: m >= args.desired_metric,
                       forward_kwargs=fwd_kwargs,
