@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -23,10 +23,9 @@ LENGTHS=(5 10)
 LR=3e-4
 BSS=(512 512 512 512)
 
-MEMORY_SIZE=1
-INPUT_TOKENS=1000
-D_MEM=1
-N_HEADS=1
+MEMORY_SIZE=16
+INPUT_TOKENS=5
+D_MEM=32
 
 ACT_TYPE=layer
 MAX_HOP=4
@@ -42,7 +41,7 @@ MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${N_ATTN_HEAD
 
 
 
-for N in 10
+for N in 20
 do
 
 for (( j=0; j<${#LENGTHS[@]}; j++ ))
@@ -103,7 +102,6 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --save_best \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
-        --freeze_mem \
         --length $LENGTH
         # --act_on \
         # --max_hop $MAX_HOP \
