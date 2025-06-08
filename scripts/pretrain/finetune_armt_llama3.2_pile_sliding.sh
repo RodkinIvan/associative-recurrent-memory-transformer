@@ -1,5 +1,5 @@
 export CUDA_VISIBLE_DEVICES=0
-export TORCH_NCCL_BLOCKING_WAIT=0
+# export TORCH_NCCL_BLOCKING_WAIT=0
 export WANDB_PROJECT=llm_pretrain
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 set -e
@@ -12,19 +12,22 @@ MODEL_TYPE=decoder
 MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
 RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:AutoModelForCausalLM
-DATASET_NAME=pg19
+
+
+DATASET_NAME=BramVanroy/CommonCrawl-CreativeCommons
+# DATASET_NAME=deepmind/pg19
+VALID_DATASET_NAME=deepmind/pg19
 
 MODEL_NAME=meta-llama/Llama-3.2-1B
 MODEL_PATH=$MODEL_NAME
 
-TOKENIZED_DATASET=/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
 
 ITERS=50000
 TBS=64
 # TBS=32
-BS=1
+BS=2
 
-LR=1e-05
+LR=1e-5
 SEGMENT_SIZE=512
 MAX_N_SEGMENTS=2
 MEMORY_SIZE=32
@@ -62,7 +65,8 @@ echo gradient accumulation steps $GRAD_ACC_STEPS
 
 # python run_finetuning_lm_rmt.py \
 accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29002 --num_processes $NP --mixed_precision bf16 run_finetuning_lm_rmt_hf.py \
-        --tokenized_dataset $TOKENIZED_DATASET \
+        --task_name $DATASET_NAME \
+        --valid_task_name $VALID_DATASET_NAME \
         --output_dir ../runs/${DATASET_NAME}/$MODEL_NAME/${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}_nfs_dmem${D_MEM}/run_$N \
         --from_pretrained $MODEL_PATH \
         --model_type $MODEL_TYPE \
@@ -94,6 +98,7 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29002 --num_pr
         --train_tokens tokens \
         --prev_seg_kv \
         --use_sink \
-        --attn_implementation eager
+        --attn_implementation eager \
+        # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
 done
 echo "done"

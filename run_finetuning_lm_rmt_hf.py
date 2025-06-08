@@ -37,6 +37,7 @@ from lm_experiments_tools.utils import get_cls_by_name, get_optimizer, prepare_r
 
 parser = HfArgumentParser(TrainingArguments)
 parser.add_argument('--task_name', type=str, help="Task name, wikitext, ...")
+parser.add_argument('--valid_task_name', type=str, help="Task name, wikitext, ...")
 parser.add_argument('--tokenized_dataset', type=str, help="path to folder with tokenized hf dataset")
 parser.add_argument('--valid_tokenized_dataset', type=str, help="path to folder with tokenized valid hf dataset", default=None)
 parser.add_argument('--train_tokens', type=str, default="input_ids")
@@ -156,7 +157,49 @@ if __name__ == '__main__':
             if args.valid_tokens != args.train_tokens:
                 validation_dataset = validation_dataset.rename_column(args.valid_tokens, args.train_tokens)
         else:
-            raise NotImplementedError("Implemented only for pre-tokenized datasets")
+            # Load dataset with streaming=True to load samples on the fly
+            train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=True)
+            validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation')
+            test_dataset = datasets.load_dataset(args.valid_task_name, split='test')
+            
+            # Create a function to tokenize on the fly
+            def tokenize_function(examples):
+                return {
+                    args.train_tokens: tokenizer(
+                        examples['text'],
+                        # truncation=True,
+                        # max_length=args.sample_size,
+                        # return_tensors=None  # Important for streaming
+                    )['input_ids']
+                }
+            
+            # Apply tokenization on the fly
+            train_dataset = train_dataset.map(
+                tokenize_function,
+                batched=True,
+                remove_columns=['text'],
+            )
+            validation_dataset = validation_dataset.map(
+                tokenize_function,
+                batched=True,
+                remove_columns=['text'],
+                desc="Tokenizing test split",
+            )
+            test_dataset = test_dataset.map(
+                tokenize_function,
+                batched=True,
+                remove_columns=['text'],
+                desc="Tokenizing test split",
+            )
+            
+            # Create a DatasetDict with the processed splits
+            dataset = datasets.DatasetDict({
+                'train': train_dataset,
+                'validation': validation_dataset,
+                'test': test_dataset
+            })
+            validation_dataset = dataset
+
 
     segment_size = args.segment_size
     history_size = args.sample_size - segment_size
@@ -225,7 +268,7 @@ if __name__ == '__main__':
     
     with accelerator.main_process_first():
         train_dataset = train_dataset.select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, history_size),
-                                                        batched=True, desc=f"Grouping train in chunks of {segment_size} and history {history_size}")
+                                                        batched=True)
         valid_dataset = validation_dataset["validation"].select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, val_history_size), 
                                                              batched=True, desc=f"Grouping valid in chunks of {segment_size} and history {val_history_size}")
         test_dataset = validation_dataset["test"].select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, val_history_size), 
@@ -320,7 +363,7 @@ if __name__ == '__main__':
     training_args_dict['per_device_eval_batch_size'] = training_args_dict.get('per_device_train_batch_size') # // 2
     training_args_dict['eval_accumulation_steps'] = 32
     if args.d_mem is None:
-        # for now, gradient checkpointing doesn't supported for ARMT
+        # for now, gradient checkpointing is not supported for ARMT
         training_args_dict['gradient_checkpointing'] = True
     else:
         training_args_dict['gradient_checkpointing'] = False
