@@ -14,9 +14,9 @@ RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:AutoModelForCausalLM
 
 
-DATASET_NAME=BramVanroy/CommonCrawl-CreativeCommons
-# DATASET_NAME=deepmind/pg19
-VALID_DATASET_NAME=deepmind/pg19
+# DATASET_NAME=BramVanroy/CommonCrawl-CreativeCommons
+DATASET_NAME=pg19
+VALID_DATASET_NAME=pg19
 
 MODEL_NAME=meta-llama/Llama-3.2-1B
 MODEL_PATH=$MODEL_NAME
@@ -38,7 +38,7 @@ SAMPLE_SIZE=$((MAX_N_SEGMENTS*SEGMENT_SIZE)) # length of task sample in tokens
 GRAD_ACC_STEPS=$(($TBS/($BS*$NP)))
 SCHEDULER=linear
 
-for N in 1
+for N in 3
 do
 
 K2=-1   # BPTT unroll length
@@ -64,7 +64,7 @@ echo SAMPLE_SIZE $SAMPLE_SIZE MODEL_NAME $MODEL_NAME  LR $LR N $N
 echo gradient accumulation steps $GRAD_ACC_STEPS
 
 # python run_finetuning_lm_rmt.py \
-accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29002 --num_processes $NP --mixed_precision bf16 run_finetuning_lm_rmt_hf.py \
+accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) --num_processes $NP --mixed_precision bf16 run_finetuning_lm_rmt_hf.py \
         --task_name $DATASET_NAME \
         --valid_task_name $VALID_DATASET_NAME \
         --output_dir ../runs/${DATASET_NAME}/$MODEL_NAME/${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}_nfs_dmem${D_MEM}/run_$N \
@@ -98,7 +98,7 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29002 --num_pr
         --train_tokens tokens \
         --prev_seg_kv \
         --use_sink \
-        --attn_implementation eager \
+        --attn_implementation eager 
         # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
 done
 echo "done"

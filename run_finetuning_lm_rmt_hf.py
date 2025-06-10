@@ -15,6 +15,9 @@ from torch.nn.utils.rnn import pad_sequence
 import accelerate
 from accelerate.utils import InitProcessGroupKwargs
 from peft import get_peft_model, LoraConfig, TaskType
+from transformers import modeling_utils
+if not hasattr(modeling_utils, "ALL_PARALLEL_STYLES") or modeling_utils.ALL_PARALLEL_STYLES is None:
+    modeling_utils.ALL_PARALLEL_STYLES = ["tp", "none","colwise",'rowwise']
 
 logger_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(format=logger_fmt, level=logging.INFO)
@@ -143,9 +146,9 @@ if __name__ == '__main__':
     logger.info(f'mixed precision: {accelerator.mixed_precision}')
 
     if args.tokenizer:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
     else:
-        tokenizer = AutoTokenizer.from_pretrained(args.from_pretrained)
+        tokenizer = AutoTokenizer.from_pretrained(args.from_pretrained, trust_remote_code=True)
 
     # Prepare datasets
     logger.info(f'preparing dataset for {args.task_name}')
@@ -154,40 +157,40 @@ if __name__ == '__main__':
         if args.tokenized_dataset is not None:
             dataset = datasets.load_from_disk(args.tokenized_dataset)
             validation_dataset = datasets.load_from_disk(args.valid_tokenized_dataset)
+            logger.info("Tokenized Dataset loaded")
             if args.valid_tokens != args.train_tokens:
                 validation_dataset = validation_dataset.rename_column(args.valid_tokens, args.train_tokens)
         else:
             # Load dataset with streaming=True to load samples on the fly
-            train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=True)
-            validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation')
-            test_dataset = datasets.load_dataset(args.valid_task_name, split='test')
-            
+            train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=True, trust_remote_code=True)
+            validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation', trust_remote_code=True)
+            test_dataset = datasets.load_dataset(args.valid_task_name, split='test', trust_remote_code=True)
+            logger.info("Dataset loaded")
             # Create a function to tokenize on the fly
             def tokenize_function(examples):
-                return {
-                    args.train_tokens: tokenizer(
+                result = tokenizer.encode(
                         examples['text'],
-                        # truncation=True,
-                        # max_length=args.sample_size,
-                        # return_tensors=None  # Important for streaming
-                    )['input_ids']
-                }
+                        return_tensors='pt'
+                )
+                # print(len(result), result[0].shape)
+                examples[args.train_tokens] = result[0]
+                return examples
             
             # Apply tokenization on the fly
             train_dataset = train_dataset.map(
                 tokenize_function,
-                batched=True,
+                batch_size=16,
                 remove_columns=['text'],
             )
             validation_dataset = validation_dataset.map(
                 tokenize_function,
-                batched=True,
+                batch_size=16,
                 remove_columns=['text'],
-                desc="Tokenizing test split",
+                desc="Tokenizing eval split",
             )
             test_dataset = test_dataset.map(
                 tokenize_function,
-                batched=True,
+                batch_size=16,
                 remove_columns=['text'],
                 desc="Tokenizing test split",
             )
@@ -246,13 +249,13 @@ if __name__ == '__main__':
         labels = pad_sequence(labels, padding_value=-100, batch_first=True)
         attention_mask = pad_sequence(attention_mask, padding_value=0, batch_first=True)
         labels_mask = pad_sequence(labels_mask, padding_value=0, batch_first=True)
-
         collated = {'input_ids': input_ids,
                     'labels': labels, 
                     'attention_mask': attention_mask,
                     'labels_mask': labels_mask.bool()
                     }
 
+        # print(len(collated['input_ids']), len(collated['input_ids'][0]), (collated['input_ids'][0] != -100).sum())
         return collated
 
     def filter_by_len(sample, min_len=16000):
@@ -275,7 +278,7 @@ if __name__ == '__main__':
                                                              batched=True, desc=f"Grouping test in chunks of {segment_size} and history {val_history_size}")
 
     
-    num_valid_examples = 100
+    num_valid_examples = 300
     valid_inds = np.linspace(1, len(valid_dataset)-1, num_valid_examples).astype(int).tolist()
     valid_dataset = valid_dataset.select(valid_inds)
 
@@ -359,17 +362,18 @@ if __name__ == '__main__':
     training_args_dict['bf16'] = True
     training_args_dict['label_names'] = ['labels']
 
-    training_args_dict['evaluation_strategy'] = 'steps'
+    training_args_dict['eval_strategy'] = 'steps'
     training_args_dict['per_device_eval_batch_size'] = training_args_dict.get('per_device_train_batch_size') # // 2
-    training_args_dict['eval_accumulation_steps'] = 32
+    training_args_dict['eval_accumulation_steps'] = training_args_dict['gradient_accumulation_steps']
+    # print("="*20, training_args_dict['gradient_accumulation_steps'], "="*20)
     if args.d_mem is None:
         # for now, gradient checkpointing is not supported for ARMT
         training_args_dict['gradient_checkpointing'] = True
     else:
         training_args_dict['gradient_checkpointing'] = False
     
-    training_args_dict['gradient_checkpointing_kwargs'] = {'use_reentrant':False}
-    training_args_dict['log_level'] = 'debug'
+    # training_args_dict['gradient_checkpointing_kwargs'] = {'use_reentrant':False}
+    # training_args_dict['log_level'] = 'debug'
     training_args_dict['report_to'] = 'wandb'
     training_args = TrainingArguments(**training_args_dict)
     # args.gradient_checkpointing = True
