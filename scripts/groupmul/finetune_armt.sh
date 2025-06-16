@@ -2,7 +2,7 @@
 export CUDA_VISIBLE_DEVICES=1
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
-set -e
+# set -e
 cd ../..
 export WANDB_PROJECT=groupmul
 CUBLAS_WORKSPACE_CONFIG=:4096:2
@@ -18,20 +18,20 @@ DATASET_PATH=irodkin/groupmul_A5_split
 ITERS=40000
 TBS=512
 
-MAX_N_SEGMENTSS=(1 1 1 1)
-LENGTHS=(5 10)
+MAX_N_SEGMENTSS=(8 10)
+LENGTHS=(15 20)
 LR=3e-4
-BSS=(512 512 512 512)
+BSS=(64 64)
 
-MEMORY_SIZE=16
-INPUT_TOKENS=5
+MEMORY_SIZE=4
+INPUT_TOKENS=2
 D_MEM=32
 
 ACT_TYPE=layer
 MAX_HOP=4
 
 DIM=512
-NUM_LAYERS=4
+NUM_LAYERS=2
 N_ATTN_HEADS=8
 
 cd base_models/gptconfigs
@@ -40,9 +40,13 @@ cd ../..
 MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${N_ATTN_HEADS}hd${DIM}.json
 
 
+START_CPT=../runs/lm_long/gpt_neox/CA//lr3e-4_linear_dmem32_-5x_mem4_bs512_iters40000_regular_bptt--1_actlayer_length10/run_25
 
-for N in 20
+
+for N in 25
 do
+
+NEW_CPT=$START_CPT
 
 for (( j=0; j<${#LENGTHS[@]}; j++ ))
 do
@@ -63,19 +67,14 @@ do
 for LR in $LR_
 do
 
-# if [[ j -gt 0 ]]
-# then
-#     PREV_SEQ_LEN=$(((INPUT_SIZE)*${MAX_N_SEGMENTSS[j-1]}))
-#     MODEL_CPT=../runs/lm_long/armt/${TASK_NAME}/$MODEL_NAME/lr${LRS[j-1]}_${SCHEDULER}_dmem${D_MEM}_${PREV_SEQ_LEN}-${MAX_N_SEGMENTSS[j-1]}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act${ACT_TYPE}_length${LENGTH}/run_$N 
-# else
-#     MODEL_CPT=None
-# fi
-MODEL_CPT=None
 
+MODEL_CPT=$NEW_CPT
+
+NEW_CPT=../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_-${MAX_N_SEGMENTS}x_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act${ACT_TYPE}_length${LENGTH}/run_$N
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500 + $N)) run_finetuning_groupmul.py \
-        --model_path ../runs/lm_long/gpt_neox/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act${ACT_TYPE}_length${LENGTH}/run_$N \
+        --model_path $NEW_CPT \
         --model_cfg $MODEL_CFG \
         --dataset_path $DATASET_PATH \
         --model_type $MODEL_TYPE \

@@ -704,7 +704,7 @@ class Trainer:
         elif load_path.is_file() and (load_path.parent / 'trainer.pckl').exists():
             trainer_state_path = load_path.parent / 'trainer.pckl'
         if trainer_state_path:
-            trainer_state = torch.load(trainer_state_path, map_location='cpu')
+            trainer_state = torch.load(trainer_state_path, map_location='cpu', weights_only=False)
         if not reset_iteration:
             self.n_iter = trainer_state.get('iteration', 0) + 1  # as saved iteration is already performed
             self.n_epoch = trainer_state.get('epoch', 0)
