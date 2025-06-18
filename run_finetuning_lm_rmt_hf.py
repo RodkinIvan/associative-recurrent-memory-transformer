@@ -8,14 +8,18 @@ import random
 import datasets
 from torch.utils.data import DataLoader
 import datetime
-
+from itertools import chain
 from transformers import Trainer, TrainingArguments
 from torch.nn.utils.rnn import pad_sequence
+from datasets.distributed import split_dataset_by_node
 
 import accelerate
 from accelerate.utils import InitProcessGroupKwargs
 from peft import get_peft_model, LoraConfig, TaskType
 from transformers import modeling_utils
+from torch.utils.data import IterableDataset
+import heapq
+
 if not hasattr(modeling_utils, "ALL_PARALLEL_STYLES") or modeling_utils.ALL_PARALLEL_STYLES is None:
     modeling_utils.ALL_PARALLEL_STYLES = ["tp", "none","colwise",'rowwise']
 
@@ -167,11 +171,9 @@ if __name__ == '__main__':
             test_dataset = datasets.load_dataset(args.valid_task_name, split='test', trust_remote_code=True)
             logger.info("Dataset loaded")
             # Create a function to tokenize on the fly
+            
             def tokenize_function(examples):
-                result = tokenizer.encode(
-                        examples['text'],
-                        return_tensors='pt'
-                )
+                result = tokenizer.encode(examples['text'], return_tensors='pt')
                 # print(len(result), result[0].shape)
                 examples[args.train_tokens] = result[0]
                 return examples
@@ -179,29 +181,38 @@ if __name__ == '__main__':
             # Apply tokenization on the fly
             train_dataset = train_dataset.map(
                 tokenize_function,
-                batch_size=16,
+                batched=False,
+                # batch_size=256,
                 remove_columns=['text'],
             )
             validation_dataset = validation_dataset.map(
                 tokenize_function,
-                batch_size=16,
+                batched=False,
                 remove_columns=['text'],
                 desc="Tokenizing eval split",
+                num_proc=1,
             )
             test_dataset = test_dataset.map(
                 tokenize_function,
-                batch_size=16,
+                batched=False,
                 remove_columns=['text'],
                 desc="Tokenizing test split",
+                num_proc=1,
             )
             
             # Create a DatasetDict with the processed splits
+            nodes = torch.cuda.device_count()
+            train_dataset = split_dataset_by_node(train_dataset, world_size=nodes, rank=0)
+            validation_dataset = split_dataset_by_node(validation_dataset, world_size=nodes, rank=0)
+            test_dataset = split_dataset_by_node(test_dataset, world_size=nodes, rank=0)
+
             dataset = datasets.DatasetDict({
-                'train': train_dataset,
-                'validation': validation_dataset,
-                'test': test_dataset
+                'train': train_dataset.with_format("torch"),
+                'validation': validation_dataset.with_format("torch"),
+                'test': test_dataset.with_format("torch")
             })
             validation_dataset = dataset
+            # validation_dataset = datasets.load_from_disk('/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized')
 
 
     segment_size = args.segment_size
@@ -212,21 +223,166 @@ if __name__ == '__main__':
     else:
         val_history_size = history_size
 
-    def group_texts(examples, segment_size, history_size=None):
-        concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
 
-        if history_size is None:
-            result = {
-                k: [t[i : i + segment_size] for i in range(0, total_length, segment_size)]
-                for k, t in concatenated_examples.items()
-            }
-        else:
-            result = {
-                k: [t[max({0, i - history_size}) : i + segment_size] for i in range(history_size, total_length, segment_size)]
-                for k, t in concatenated_examples.items()
-            }
+    class ChunkedWindowStream(IterableDataset):
+        def __init__(self, raw_ds, segment_size, history_size, chunk_tokens, dataset_length, seed=0):
+            self.raw_ds       = raw_ds
+            self.seg          = segment_size
+            self.hist         = history_size
+            self.block        = segment_size + history_size
+            self.chunk_tokens = chunk_tokens
+            self.seed         = seed
+            self.dataset_length = dataset_length
+
+            # how many windows per “epoch” (used to satisfy __len__)
+            # self.windows_per_epoch = self.chunk_tokens // self.block
+
+        # def __len__(self):
+        #     return self.dataset_length
+
+        def __iter__(self):
+            buf = []
+            rng = random.Random(self.seed)
+            
+            for sample in self.raw_ds:
+                # accumulate tokens
+                buf.extend(sample[args.train_tokens])
+                
+                # once we have enough, build ALL windows at once
+                if len(buf) >= self.chunk_tokens:
+                    flat     = np.array(buf, dtype=np.int32)
+                    starts   = np.arange(self.hist, len(flat) - self.seg + 1, self.seg, dtype=int)
+                    idx      = starts[:, None] + np.arange(-self.hist, self.seg, dtype=int)
+                    windows  = flat[idx]   # shape (n_windows, hist+seg)
+                    
+                    # shuffle the windows
+                    windows = windows.tolist()
+                    rng.shuffle(windows)
+                    
+                    # yield them in random order
+                    for w in windows:
+                        yield {args.train_tokens: w}
+                    
+                    # clear buffer for next chunk
+                    buf = []
+
+    class OnlineWindowStream(IterableDataset):
+        def __init__(self, raw_ds, segment_size, history_size,
+                    chunk_tokens, seed=0):
+            self.raw_ds  = raw_ds
+            self.seg     = segment_size
+            self.hist    = history_size
+            self.block   = segment_size + history_size
+            self.B       = chunk_tokens // segment_size
+            self.seed    = seed
+
+        def __iter__(self):
+            rng  = random.Random(self.seed)
+            buf  = []          # holds ≤ B windows
+            tail = []          # rolling token tail for windowing
+
+            for sample in self.raw_ds:
+                tail.extend(sample[args.train_tokens])
+
+                # emit as many full windows as we can
+                while len(tail) >= self.block:
+                    win  = tail[: self.block]
+                    tail = tail[self.seg :]          # slide by segment_size
+
+                    # ───── Fisher–Yates with fixed buffer ─────
+                    if len(buf) < self.B:
+                        buf.append(win)              # just fill
+                    else:
+                        j = rng.randrange(self.B)    # 0 … B-1
+                        yield {args.train_tokens: buf[j]}  # emit old window
+                        buf[j] = win                 # insert new one
+                    # -------------------------------------------
+
+            # Stream finished → flush remaining buffer
+            rng.shuffle(buf)
+            for w in buf:
+                yield {args.train_tokens: w}
+
+    class HashedWindowStream(IterableDataset):
+        """
+        Online sliding-window builder + hash-based bounded shuffle.
+        Produces a near-perfect random permutation using only `B` windows of RAM.
+        """
+        def __init__(
+            self,
+            raw_ds,
+            segment_size,
+            history_size,
+            chunk_tokens,
+            seed=0,
+        ):
+            self.raw_ds   = raw_ds
+            self.seg      = segment_size
+            self.hist     = history_size
+            self.block    = segment_size + history_size
+            self.B        = chunk_tokens // segment_size
+            self.seed     = seed
+            random.seed(seed)
+
+        def __iter__(self):
+            tail = []
+            heap = []                     # min-heap of (key, window)
+
+            for sample in self.raw_ds:
+                tail.extend(sample["input_ids"])
+
+                # build windows on-the-fly
+                while len(tail) >= self.block:
+                    win = tail[: self.block]
+                    tail = tail[self.seg :]
+
+                    key  = random.random()
+                    # keep key positive so heapq is happy
+                    heapq.heappush(heap, (key, win.copy()))
+
+                    if len(heap) > self.B:
+                        _, w = heapq.heappop(heap)   # smallest key
+                        yield {"input_ids": w.tolist()}
+
+            # end-of-stream → flush the heap
+            heap.sort()        # turn heap into sorted list by key
+            for _, w in heap:
+                yield {"input_ids": w.tolist()}
+
+    def group_texts(examples, segment_size, history_size=None):
+        # concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
+        # total_length = len(concatenated_examples[list(examples.keys())[0]])
+
+        # if history_size is None:
+        #     result = {
+        #         k: [t[i : i + segment_size] for i in range(0, total_length, segment_size)]
+        #         for k, t in concatenated_examples.items()
+        #     }
+        # else:
+        #     result = {
+        #         k: [t[max({0, i - history_size}) : i + segment_size] for i in range(history_size, total_length, segment_size)]
+        #         for k, t in concatenated_examples.items()
+        #     }
+        # return result
+        # 1. flatten once, in C
+        col = 'input_ids'
+        result = dict()
+        for col in examples.keys():
+            flat = np.fromiter(chain.from_iterable(examples[col]), dtype=np.int32)
+
+            if history_size is None:
+                usable = (len(flat) // segment_size) * segment_size          # trim ragged tail
+                flat   = flat[:usable].reshape(-1, segment_size)
+                return {col: flat.tolist()}
+
+            # 2. sliding-window with stride = segment)suze
+            starts  = np.arange(history_size, len(flat) - segment_size + 1, segment_size, dtype=np.int32)
+            idx     = starts[:, None] + np.arange(-history_size, segment_size, dtype=np.int32)
+            windows = flat[idx]                                # (n_windows, history_size+block)
+            result[col] = windows.tolist()
         return result
+
+
 
     id_pad_value = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     def collate_fn(batch):
@@ -249,6 +405,7 @@ if __name__ == '__main__':
         labels = pad_sequence(labels, padding_value=-100, batch_first=True)
         attention_mask = pad_sequence(attention_mask, padding_value=0, batch_first=True)
         labels_mask = pad_sequence(labels_mask, padding_value=0, batch_first=True)
+        # logger.info(f"\n\n\n\n{input_ids.shape}, \n\n {tokenizer.decode(input_ids[0])}\n\n\n\n")
         collated = {'input_ids': input_ids,
                     'labels': labels, 
                     'attention_mask': attention_mask,
@@ -270,12 +427,42 @@ if __name__ == '__main__':
         train_dataset = dataset['train'].filter(filter_by_16k)
     
     with accelerator.main_process_first():
-        train_dataset = train_dataset.select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, history_size),
-                                                        batched=True)
-        valid_dataset = validation_dataset["validation"].select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, val_history_size), 
-                                                             batched=True, desc=f"Grouping valid in chunks of {segment_size} and history {val_history_size}")
+        n_cpus = max(os.cpu_count() - 1, 1)
+        BATCH = 1024
+        if args.tokenized_dataset is not None:
+            
+            train_dataset = train_dataset.select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, history_size,),
+                                                            batched=True, batch_size=BATCH)
+            # BUFFER = 1024
+            # train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+        else:
+            # Estimate number of tokens to consume per epoch and derive number of windows
+            tokens_per_chunk = 50_000_000  # adjust this estimate as needed
+            # Use a buffer at least as large as the number of windows for effective shuffling
+            BUFFER = 2048
+            train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+            # Wrap the raw stream in windowed iterable and shuffle windows
+            # length = 5_451_448
+            # train_dataset = ChunkedWindowStream(train_dataset, segment_size, history_size, tokens_per_chunk, length, args.seed)
+            train_dataset = OnlineWindowStream(
+                raw_ds=train_dataset, 
+                segment_size=segment_size, 
+                history_size=history_size, 
+                chunk_tokens=tokens_per_chunk, 
+                seed=args.seed
+            )
+            # train_dataset = OnlineWindowStream(
+            #     raw_ds=train_dataset, 
+            #     segment_size=segment_size, 
+            #     history_size=history_size, 
+            #     chunk_tokens=tokens_per_chunk, 
+            #     seed=args.seed
+            # )
+            # train_dataset = train_dataset.select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, history_size,), batched=True, batch_size=BATCH)
+        valid_dataset = validation_dataset["validation"].select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, val_history_size ), 
+                                                             batched=True, batch_size=BATCH, desc=f"Grouping valid in chunks of {segment_size} and history {val_history_size}", num_proc=n_cpus)
         test_dataset = validation_dataset["test"].select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, val_history_size), 
-                                                             batched=True, desc=f"Grouping test in chunks of {segment_size} and history {val_history_size}")
+                                                             batched=True, batch_size=BATCH, desc=f"Grouping test in chunks of {segment_size} and history {val_history_size}", num_proc=n_cpus)
 
     
     num_valid_examples = 300
@@ -295,6 +482,7 @@ if __name__ == '__main__':
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
         model = model_cls.from_pretrained(args.from_pretrained, attn_implementation=args.attn_implementation,)
+    model.parallelize()
 
     if args.use_lora:
         peft_config = LoraConfig(

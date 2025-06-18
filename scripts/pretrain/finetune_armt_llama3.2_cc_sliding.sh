@@ -1,5 +1,5 @@
-export CUDA_VISIBLE_DEVICES=0
-# export TORCH_NCCL_BLOCKING_WAIT=0
+export CUDA_VISIBLE_DEVICES=1
+export TORCH_NCCL_BLOCKING_WAIT=0
 export WANDB_PROJECT=llm_pretrain
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 set -e
@@ -38,7 +38,7 @@ SAMPLE_SIZE=$((MAX_N_SEGMENTS*SEGMENT_SIZE)) # length of task sample in tokens
 GRAD_ACC_STEPS=$(($TBS/($BS*$NP)))
 SCHEDULER=linear
 
-for N in 3
+for N in 10
 do
 
 K2=-1   # BPTT unroll length
