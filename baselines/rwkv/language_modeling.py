@@ -30,7 +30,8 @@ class RWKVModel(torch.nn.Module):
                     logits=out,
                     state=(new_shift, new_wkv)
                 )
-    
+
+    @torch.no_grad()
     def generate(self, input_ids, attention_mask, pad_token_id, max_new_tokens, state, max_length):
         generation_outputs = [[]]
         output = self.forward(input_ids=input_ids, state=state)
@@ -40,9 +41,10 @@ class RWKVModel(torch.nn.Module):
         for i in range(max_new_tokens):
             token = out[0, -1].argmax(-1)
             generation_outputs[0].append(token)
-            out, state = self.forward(
-                input_ids=torch.tensor([[token.item()]],dtype=torch.long, device=device), 
-                state=state)
+            if i != max_new_tokens - 1:
+                out, state = self.forward(
+                    input_ids=torch.tensor([[token.item()]],dtype=torch.long, device=device), 
+                    state=state)
         return generation_outputs
 
     def get_input_embeddings(self):
