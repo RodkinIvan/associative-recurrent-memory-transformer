@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
-set -e
+# set -e
 cd ../..
 export WANDB_PROJECT=groupmul
 CUBLAS_WORKSPACE_CONFIG=:4096:2
@@ -15,13 +15,13 @@ BACKBONE_CLS=transformers:GPTNeoXForCausalLM
 
 DATASET_PATH=irodkin/groupmul_A5_split
 
-ITERS=40000
+ITERS=200000
 TBS=512
 
-MAX_N_SEGMENTSS=(1 1 1 1)
-LENGTHS=(5 10)
+MAX_N_SEGMENTSS=(1 1 1 1 1)
+LENGTHS=(5 10 15 20 40)
 LR=3e-4
-BSS=(512 512 512 512)
+BSS=(512 512 512 512 512)
 
 MEMORY_SIZE=1
 INPUT_TOKENS=1000
@@ -32,8 +32,19 @@ ACT_TYPE=layer
 MAX_HOP=4
 
 DIM=512
-NUM_LAYERS=4
+NUMS_LAYERS=(1 1 1 1 2)
 N_ATTN_HEADS=8
+
+
+
+
+for N in 15
+do
+
+for (( j=0; j<${#LENGTHS[@]}; j++ ))
+do
+
+NUM_LAYERS=${NUMS_LAYERS[j]}
 
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $N_ATTN_HEADS
@@ -41,12 +52,6 @@ cd ../..
 MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${N_ATTN_HEADS}hd${DIM}.json
 
 
-
-for N in 10
-do
-
-for (( j=0; j<${#LENGTHS[@]}; j++ ))
-do
 MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j]}
 
 # LR_=${LRS[j]}
@@ -72,6 +77,8 @@ do
 #     MODEL_CPT=None
 # fi
 MODEL_CPT=None
+
+export WANDB_NAME=gptneox_act_A5_${NUM_LAYERS}L_l${LENGTHS[j]}
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
@@ -104,11 +111,11 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
         --freeze_mem \
-        --length $LENGTH
-        # --act_on \
-        # --max_hop $MAX_HOP \
-        # --time_penalty 3e-4 \
-        # --act_type $ACT_TYPE \
+        --length $LENGTH \
+        --act_on \
+        --max_hop $MAX_HOP \
+        --time_penalty 3e-4 \
+        --act_type $ACT_TYPE
 done
 done
 done
