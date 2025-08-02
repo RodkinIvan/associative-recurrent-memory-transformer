@@ -59,7 +59,6 @@ class AssociativeLayerWrapper(torch.nn.Module):
         self.d_model = d_model
         self.num_mem_tokens = num_mem_tokens
         self.d_mem = d_mem
-        self.gating = gating
         self.num_heads = num_heads
         
         nu = 3
@@ -81,10 +80,7 @@ class AssociativeLayerWrapper(torch.nn.Module):
         self.W_mq = torch.nn.Linear(d_model, d_mem, bias=False)
         self.W_mk = torch.nn.Linear(d_model, d_mem, bias=False)
         self.W_mv = torch.nn.Linear(d_model, d_model, bias=False)
-        if gating:
-            self.W_mb = torch.nn.Linear(d_model, d_model)
-        else:
-            self.W_mb = torch.nn.Linear(d_model, self.num_heads)
+        self.W_mb = torch.nn.Linear(d_model, self.num_heads)
         torch.nn.init.zeros_(self.W_mv.weight)
         
 
@@ -203,30 +199,25 @@ class AssociativeLayerWrapper(torch.nn.Module):
         self.W_mem = self.W_mem.to(mem_tokens.device).to(torch.bfloat16)
         k = self.W_mk(mem_tokens)
         mk = self.phi(k)
-        mk = F.normalize(mk, dim=-1, p=2.0)
+        mk = F.normalize(mk, dim=-1, p=2.0).to(mem_tokens.device).to(torch.bfloat16)
+        mk_heads = mk.view(mk.size(0), mk.size(1), self.num_heads, self.head_dim)
+
+        mq_heads = torch.zeros_like(mk_heads).to(mem_tokens.device).to(torch.bfloat16)
 
         new_mv = self.W_mv(mem_tokens) # (bsz, num_mem_tokens, d_model)
-        # Reshape for multi-head computation
-        mk_heads = mk.view(mk.size(0), mk.size(1), self.num_heads, self.head_dim)
-        # W_mem has shape: (1, num_heads, head_dim, d_model // num_heads)
-        # Compute attention for each head independently and concatenate
-        prev_mv_heads = torch.einsum('bqhd,bhdk->bqhk', mk_heads, self.W_mem)  # (bsz, num_mem_tokens, num_heads, d_model // num_heads)
-        prev_mv = prev_mv_heads.reshape(mk.size(0), mk.size(1), self.d_model)  # Concatenate heads back to full dimension
+        mv_heads = new_mv.view(new_mv.size(0), new_mv.size(1), self.num_heads, self.d_model // self.num_heads)
 
-        
-        # wandb.log({f"gamma_{self.info['layer']}": new_info_coef.mean(dim=1).item() if isinstance(new_info_coef, torch.Tensor) else 1}, step=self.seg_num)
-        mv = new_mv - prev_mv
+        mb_heads = torch.sigmoid(self.W_mb(mem_tokens))
+        _, final_state = chunk_delta_rule(
+            mq_heads,
+            mk_heads,
+            mv_heads,
+            mb_heads,
+            initial_state=self.W_mem,
+            output_final_state=True
+        )
 
-        # new_norm = torch.linalg.norm(new_mv, dim=-1)
-        # old_norm = torch.linalg.norm(prev_mv, dim=-1)
-        # new_info_coef = torch.clip(1 - old_norm / (new_norm + 1e-5), -10, 10)[..., None].detach()
-        # new_info_coef = 1 - denom
-
-        mb = torch.sigmoid(self.W_mb(mem_tokens))
-
-        associations = self.construct_associations(mk, mv, mb)
-
-        self.W_mem = self.W_mem + associations
+        self.W_mem = final_state
         self.seg_num += 1
 
     def freeze_mem(self):
