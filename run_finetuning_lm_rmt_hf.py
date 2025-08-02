@@ -482,7 +482,10 @@ if __name__ == '__main__':
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
         model = model_cls.from_pretrained(args.from_pretrained, attn_implementation=args.attn_implementation,)
-    model.parallelize()
+    try:
+        model.parallelize()
+    except Exception as e:
+        logger.error(f'Error in parallelize: {e}')
 
     if args.use_lora:
         peft_config = LoraConfig(
