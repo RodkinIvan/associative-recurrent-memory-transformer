@@ -711,7 +711,7 @@ class Trainer:
 
         if not load_only_model_ckpt:
             logger.info('Loading model, trainer, and accelerate state')
-            self.accelerator.load_state(load_path / 'accelerate_state', strict=False)
+            self.accelerator.load_state(load_path / 'accelerate_state')
             if reset_optimizer:
                 raise RuntimeError('Reset optimizer only is not supported. You may load only model weights with'
                                    '--reset_optimizer --reset_lr')
@@ -721,7 +721,7 @@ class Trainer:
         else:
             logger.info(f'Loading model from {load_path}')
             checkpoint = torch.load(load_path, map_location='cpu')
-            missing_k, unexpected_k = self.accelerator.unwrap_model(self.model).load_state_dict(checkpoint, strict=False)
+            missing_k, unexpected_k = self.accelerator.unwrap_model(self.model).load_state_dict(checkpoint)
             if len(missing_k) != 0:
                 logger.info(f'{missing_k} were not loaded from checkpoint! These parameters were randomly initialized.')
             if len(unexpected_k) != 0:

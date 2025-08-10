@@ -1,28 +1,35 @@
+import sys
+import os
+os.environ["RWKV_TRAIN_TYPE"] = 'infctx'
+os.environ["WKV"] = 'fla'
+os.environ['RWKV_MY_TESTING'] = 'x060'
+# os.environ["RWKV_FLOAT_MODE"] = "bf16"
 import math
 import torch
 from torch.nn import CrossEntropyLoss
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
-from baselines.rwkv.RWKV_v5.src.model import RWKV
-from transformers import RwkvForCausalLM
+
+from baselines.rwkv.RWKV_v5.src.model import RWKV as RWKV5
+from baselines.rwkv.RWKV_v6.src.model import RWKV as RWKV6
 from munch import Munch
 
-class RWKV_v5_hf(torch.nn.Module):
+class RWKVModel(torch.nn.Module):
     def __init__(self, *args, **kwargs):
         super().__init__()
-        self.model = RwkvForCausalLM.from_pretrained(*args, **kwargs)
 
-    @staticmethod
-    def from_pretrained(*_args, **kwargs):
-        model = RWKV_v5_hf(*_args, **kwargs)
-        return model
-
-    def forward(self, input_ids, state=None, attention_mask=None):
-        out = self.model(input_ids, state=state)
-        return out.logits, out.state
+    def forward(self, input_ids=None, inputs_embeds=None, state=None, attention_mask=None, *args, **kwargs):
+        if state is None:
+            state = (None, None)
+        out, new_shift, new_wkv = self.model(idx=input_ids, embs=inputs_embeds, last_shift_states=state[0], last_wkv_states=state[1])
+        return  Munch(
+                    logits=out,
+                    state=(new_shift, new_wkv)
+                )
     
     def generate(self, input_ids, attention_mask, pad_token_id, max_new_tokens, state, max_length):
         generation_outputs = [[]]
-        out, state = self.forward(input_ids=input_ids, state=state)
+        output = self.forward(input_ids=input_ids, state=state)
+        out, state = output['logits'], output['state']
         device = next(self.model.parameters()).device
         assert input_ids.size(0) == 1
         for i in range(max_new_tokens):
@@ -33,10 +40,13 @@ class RWKV_v5_hf(torch.nn.Module):
                 state=state)
         return generation_outputs
 
+    def get_input_embeddings(self):
+        return self.model.emb
+        
 class RWKV_v5_tiny(torch.nn.Module):
     def __init__(self, **args):
         super().__init__()
-        self.model = RWKV(**args)
+        self.model = RWKV5(**args)
 
     @staticmethod
     def from_pretrained(*_args, **kwargs):
@@ -45,6 +55,7 @@ class RWKV_v5_tiny(torch.nn.Module):
             grad_cp=False
         )
         model = RWKV_v5_tiny(**args)
+        
         return model
 
     def forward(self, input_ids, state=None, attention_mask=None):
@@ -66,41 +77,42 @@ class RWKV_v5_tiny(torch.nn.Module):
                 input_ids=torch.tensor(token[..., None],dtype=torch.long, device=device), 
                 state=state)
         return generation_outputs
-
-class RWKV_v5(torch.nn.Module):
-    def __init__(self, **args):
+class RWKV_v6(RWKVModel):
+    def __init__(self, *args, **kwargs):
         super().__init__()
-        self.model = RWKV(**args)
-
+        self.model = RWKV6(*args, **kwargs)
+        self.config = Munch(
+            n_embd=self.model.n_embd,
+            hidden_size=self.model.n_embd
+        )
     @staticmethod
     def from_pretrained(*_args, **kwargs):
+        load = _args[0]
         args = dict(
-            load_model='/home/rodkin/lab/RWKV-5-World-0.4B-v2-20231113-ctx4096.pth',
-            grad_cp=False
+            load_model=load,
+            grad_cp=True
+        )
+        model = RWKV_v6(**args)
+        return model
+
+class RWKV_v5(RWKVModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.model = RWKV5(*args, **kwargs)
+        self.config = Munch(
+            n_embd=self.model.n_embd,
+            hidden_size=self.model.n_embd
+        )
+    @staticmethod
+    def from_pretrained(*_args, **kwargs):
+        load = _args[0]
+        args = dict(
+            load_model=load,
+            grad_cp=True
         )
         model = RWKV_v5(**args)
         return model
 
-    def forward(self, input_ids, state=None, attention_mask=None):
-        if state is None:
-            state = (None, None)
-        out, new_shift, new_wkv = self.model(idx=input_ids, last_shift_states=state[0], last_wkv_states=state[1])
-        return out, (new_shift, new_wkv)
-    
-    def generate(self, input_ids, attention_mask, pad_token_id, max_new_tokens, state, max_length):
-        generation_outputs = [[]]
-        out, state = self.forward(input_ids=input_ids, state=state)
-        device = next(self.model.parameters()).device
-        assert input_ids.size(0) == 1
-        for i in range(max_new_tokens):
-            token = out[0, -1].argmax(-1)
-            generation_outputs[0].append(token)
-            out, state = self.forward(
-                input_ids=torch.tensor([[token.item()]],dtype=torch.long, device=device), 
-                state=state)
-        return generation_outputs
-
-        
 class MemoryCell(torch.nn.Module):
     def __init__(self, base_model):
         super().__init__()
@@ -108,7 +120,8 @@ class MemoryCell(torch.nn.Module):
 
     def forward(self, input_ids, memory_state=None, labels=None, labels_mask=None, **kwargs):
         seg_kwargs = self.process_input(input_ids, memory_state, **kwargs)
-        out, state = self.model(**seg_kwargs)
+        output = self.model(**seg_kwargs)
+        out, state = output['logits'], output['state']
         out = self.process_output(out, labels, labels_mask, **kwargs)
 
         return out, state
@@ -127,6 +140,7 @@ class MemoryCell(torch.nn.Module):
         
         seg_kwargs['input_ids'] = input_ids
         seg_kwargs['state'] = memory_state
+        del seg_kwargs['attention_mask']
 
         return seg_kwargs
     
@@ -154,7 +168,6 @@ class RecurrentWrapper(torch.nn.Module):
         super().__init__()
         self.memory_cell = memory_cell
         self.rmt_config = rmt_kwargs
-
     def forward(self, 
                 input_ids, 
                 labels=None, 
@@ -164,15 +177,19 @@ class RecurrentWrapper(torch.nn.Module):
                 output_attentions=None, 
                 output_hidden_states=None,
                 input_segmented=None,
-                sliding_window=None
+                sliding_window=None,
+                output_only_last_segment=False,
                 ):
         memory_state = None
+
         segmented = self.segment(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels, labels_mask=labels_mask)
         cell_outputs = []
         for seg_num, segment in enumerate(segmented):
             cell_out, memory_state = self.memory_cell(**segment, memory_state=memory_state)
             
-            cell_outputs.append(cell_out)
+            if (not output_only_last_segment) or (seg_num == len(segmented) - 1):
+                cell_outputs.append(cell_out)
+            
             self.manage_gradients(memory_state, seg_num)
 
         out = self.process_outputs(cell_outputs, labels=labels, 
@@ -227,6 +244,7 @@ class RecurrentWrapper(torch.nn.Module):
         out = CausalLMOutputWithCrossAttentions()
         full_logits = torch.cat([o.logits for o in cell_outputs], dim=1)
         labels = kwargs.get('labels')
+        labels = labels[:, -full_logits.size(1):]
         if labels is not None:
             shift_labels = labels[..., 1:].contiguous()
             shift_logits = full_logits[..., :-1, :].contiguous()
@@ -235,10 +253,11 @@ class RecurrentWrapper(torch.nn.Module):
             
             loss_fct = CrossEntropyLoss()
             labels_mask = kwargs.get('labels_mask')
+            labels_mask = labels_mask[:, -full_logits.size(1):]
             if labels_mask is not None:
                 shift_mask = labels_mask[..., :-1].contiguous()
 
-                flat_labels = flat_labels[shift_mask.view(-1)]
+                flat_labels = flat_labels[shift_mask.view(-1)] #
                 flat_logits = flat_logits[shift_mask.view(-1)]
                 
             out['loss'] = loss_fct(flat_logits, flat_labels)

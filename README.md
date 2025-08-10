@@ -1,16 +1,20 @@
 # Associative Recurrent Memory Transformer implementation compatible with Hugging Face models
 
 
-ARMT is a memory-augmented segment-level recurrent Transformerm based on Recurrent Memory Transformer. It enhances the original RMT with capacious and flexible associative memory and achieves state-of-the-art scores on BABILong benchmark.
+ARMT is a memory-augmented segment-level recurrent Transformer. It scales up to 50M tokens being trained only on 16k. It enhances the original RMT with capacious and flexible associative memory and achieves state-of-the-art scores on BABILong benchmark.
 
-> [paper](https://arxiv.org/abs/2407.04841), [code](https://github.com/RodkinIvan/associative-recurrent-memory-transformer) Associative Recurrent Memory Transformer
+>[paper](https://arxiv.org/abs/2407.04841) [code](https://github.com/RodkinIvan/associative-recurrent-memory-transformer/tree/llama_armt) Associative Recurrent Memory Transformer
+
+>[paper](https://arxiv.org/abs/2304.11062) Scaling Transformer to 1M tokens and beyond with RMT
+
+>[paper](https://arxiv.org/abs/2207.06881) Recurrent Memory Transformer
 
 
-Associative Recurrent Memory Transformer is implemented as follows:
+We implement our memory mechanism with no changes to Transformer model by adding special memory tokens and linear-attention style associative memory. The model is trained to control both memory operations and sequence representations processing.
 
 ![**ARMT**](img/armt.png)
 
-We implement our memory mechanism with no changes to Transformer model by adding special memory tokens to the input sequence. The model is trained to control both memory operations and sequence representations processing.
+
 
 ## Installation
 ```bash
@@ -25,6 +29,13 @@ based on metrics, custom metrics and data transformations support.
 Full requirements for all experiments are specified in requirements.txt. Install requirements after cloning the repo:
 ```bash
 pip install -r requirements.txt
+```
+
+To run langudge modelling with ARMT with sliding window:
+
+```
+cd scripts/pg19
+bash finetune_armt_llama3.2_pg19_sliding.sh
 ```
 
 
@@ -52,6 +63,16 @@ If you find our work useful, please cite the RMT and ARMT papers:
 }
 ```
 ```
+@misc{kuratov2024search,
+      title={In Search of Needles in a 11M Haystack: Recurrent Memory Finds What LLMs Miss}, 
+      author={Yuri Kuratov and Aydar Bulatov and Petr Anokhin and Dmitry Sorokin and Artyom Sorokin and Mikhail Burtsev},
+      year={2024},
+      eprint={2402.10790},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL}
+}
+```
+```
 @misc{rodkin2024associativerecurrentmemorytransformer,
       title={Associative Recurrent Memory Transformer}, 
       author={Ivan Rodkin and Yuri Kuratov and Aydar Bulatov and Mikhail Burtsev},
@@ -62,3 +83,4 @@ If you find our work useful, please cite the RMT and ARMT papers:
       url={https://arxiv.org/abs/2407.04841}, 
 }
 ```
+

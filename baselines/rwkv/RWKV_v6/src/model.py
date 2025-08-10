@@ -5,8 +5,8 @@
 global RWKV_JIT_ON, RWKV_TORCH_COMPILE, RWKV_NO_CUDA
 
 from .module.CoreDependencies import *
-from .module.ChannelMix import RWKV_ChannelMix
-from .module.TimeMix import RWKV_TimeMix
+from .module.ChannelMix import RWKV_ChannelMix6_0
+from .module.TimeMix import RWKV_TimeMix6_0
 
 # ---
 # Isolating out known operations that **does not work** with torch.compile
@@ -26,7 +26,7 @@ def deepspeed_checkpoint(*args, **kwargs):
 
 class BlockState:
 
-    def __init__(self, time_mix_state,
+    def __init__(self, time_mix_state: tuple[torch.Tensor,torch.Tensor],
                  channel_mix_state: torch.Tensor):
         self.time_mix_state = time_mix_state
         self.channel_mix_state = channel_mix_state
@@ -85,8 +85,8 @@ class Block(nn.Module):
         if self.layer_id == 0:
             self.ln0 = nn.LayerNorm(n_embd)
 
-        self.att = RWKV_TimeMix(layer_id, n_layer, n_embd, n_head, head_size, dim_att)
-        self.ffn = RWKV_ChannelMix(layer_id, n_layer, n_embd, dim_ffn)
+        self.att = RWKV_TimeMix6_0(layer_id, n_layer, n_embd, n_head, head_size, dim_att)
+        self.ffn = RWKV_ChannelMix6_0(layer_id, n_layer, n_embd, dim_ffn)
 
         # Setup droupout at block level
         self.dropout = dropout
@@ -94,7 +94,7 @@ class Block(nn.Module):
             self.drop0 = nn.Dropout(p = dropout)
             self.drop1 = nn.Dropout(p = dropout)
 
-    # @TCompileBaseline
+    @TCompileBaseline
     def forward(self, x, last_state: BlockState):
         if self.layer_id == 0:
             x = self.ln0(x)
@@ -162,7 +162,7 @@ class L2Wrap(torch.autograd.Function):
 ### ---
 # Core RWKV module
 ### ---
-class RWKV(nn.Module):
+class RWKV(L.LightningModule):
 
     def __init__(self,
                  # Model file path to load from
@@ -615,7 +615,7 @@ class RWKV(nn.Module):
         return -1
 
     # @TCompileBaseline
-    def forward(self, idx: torch.Tensor, embs = None, last_shift_states: torch.Tensor = None,
+    def forward(self, idx=None, embs=None,last_shift_states: torch.Tensor = None,
                 last_wkv_states: torch.Tensor = None):
         if embs is None:
             B, T = idx.size()

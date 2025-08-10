@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=1,2,3,4
-NP=4 # ./test_bert_sparse_pretrain_train_valid.sh
+export CUDA_VISIBLE_DEVICES=0
+
+NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}') # ./test_bert_sparse_pretrain_train_valid.sh
 set -e
 cd ../..
+# WANDB_PROJECT=t5-experiments
+
+export NOT_INVERT_ATTN_MASK=1
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
@@ -10,28 +14,26 @@ CUDA_LAUNCH_BLOCKING=1
 MODEL_TYPE=decoder
 MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
 RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
-BACKBONE_CLS=transformers:AutoModelForCausalLM
-TEACHER_CLS=transformers:AutoModelForCausalLM
+BACKBONE_CLS=base_models.modeling_gpt2:GPT2LMHeadModel
 TASK_NAME=wikitext-103-v1
 
 ITERS=36000
 TBS=32
 
 MAX_N_SEGMENTSS=(8)
-MAX_VAL_SEGMENTSS=(15)
+MAX_VAL_SEGMENTSS=(16)
 MEMORY_SIZES=(16)
 INPUT_TOKENS=128
 LRS=(1e-4)
 MODEL=irodkin/gpt2-wiki103
-BSS=(1)
+BSS=(4)
 
-TEACHER=irodkin/gpt2-wiki103
 D_MEM=96
 N_HEADS=1
 
 
 
-for N in 4
+for N in 5
 do
 
 for MODEL_NAME in $MODEL
@@ -43,11 +45,11 @@ MEMORY_SIZE=${MEMORY_SIZES[j]}
 MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j]}
 MAX_VAL_SEGMENTS=${MAX_VAL_SEGMENTSS[j]}
 
-INPUT_SIZE=$(($INPUT_TOKENS+2*$MEMORY_SIZE))
-INPUT_SEQ_LEN=$(((INPUT_SIZE-2*MEMORY_SIZE)*MAX_N_SEGMENTS))
+INPUT_SIZE=$(($INPUT_TOKENS))
+INPUT_SEQ_LEN=$(((INPUT_SIZE)*MAX_N_SEGMENTS))
 TGT_LEN=$INPUT_SEQ_LEN
 LR_=${LRS[j]}
-VAL_SEQ_LEN=$(((INPUT_SIZE-2*MEMORY_SIZE)*MAX_VAL_SEGMENTS))
+VAL_SEQ_LEN=$(((INPUT_SIZE)*MAX_VAL_SEGMENTS))
 ALPHA=${ALPHAS[j]}
 
 BS=${BSS[j]}
@@ -63,17 +65,17 @@ do
 
 if [[ j -gt 0 ]]
 then
-    PREV_SEQ_LEN=$(((INPUT_SIZE-2*MEMORY_SIZE)*${MAX_N_SEGMENTSS[j-1]}))
-    MODEL_CPT=../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LRS[j-1]}_${SCHEDULER}_alpha${ALPHAS[j-1]}_dmem${D_MEM}_${PREV_SEQ_LEN}-${MAX_N_SEGMENTSS[j-1]}x${INPUT_SIZE}_mem${MEMORY_SIZES[j-1]}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N 
+    PREV_SEQ_LEN=$(((INPUT_SIZE)*${MAX_N_SEGMENTSS[j-1]}))
+    MODEL_CPT=../runs/lm_long/armt_sliding/${TASK_NAME}/$MODEL_NAME/lr${LRS[j-1]}_${SCHEDULER}_alpha${ALPHAS[j-1]}_dmem${D_MEM}_${PREV_SEQ_LEN}-${MAX_N_SEGMENTSS[j-1]}x${INPUT_SIZE}_mem${MEMORY_SIZES[j-1]}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N 
 else
     MODEL_CPT=None
 fi
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MODEL_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29501 run_finetuning_lm_rmt_distil.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $(($N + 29500)) run_finetuning_lm_rmt_distil.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_alpha${ALPHA}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
+        --model_path ../runs/lm_long/armt_sliding/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_alpha${ALPHA}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --memory_cell_cls $MEMORY_CELL \
@@ -93,17 +95,20 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --iters $ITERS \
         --k1 -1 --k2 $K2 \
         --optimizer AdamW  --weight_decay 0.01 \
-        --lr ${LR} --lr_scheduler $SCHEDULER --num_warmup_steps 1000 \
+        --lr ${LR} --lr_scheduler $SCHEDULER --num_warmup_steps 10 \
         --data_n_workers 2 \
         --log_interval 50 --valid_interval 250 \
         --show_valid_examples 5 \
         --early_stopping_patience 15 \
         --seed $(($N+42*$j)) \
-        --clip_grad_value 5.0 \
+        --clip_grad_norm 1.0 \
         --save_best \
-        --tokenizer 'openai-community/gpt2' \
+        --tokenizer gpt2 \
         --d_mem $D_MEM \
-        --n_heads $N_HEADS
+        --n_heads $N_HEADS \
+        --layers_attr transformer.h \
+        --prev_seg_kv \
+        --use_sink
 done
 done
 done

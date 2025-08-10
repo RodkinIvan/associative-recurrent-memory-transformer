@@ -28,8 +28,8 @@ logger = logging.getLogger('')
 
 
 # if CUDA_VISIBLE_DEVICES is not set make all gpus visible
-if os.environ.get('CUDA_VISIBLE_DEVICES', None) is None:
-    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(torch.cuda.device_count())])
+# if os.environ.get('CUDA_VISIBLE_DEVICES', None) is None:
+#     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(torch.cuda.device_count())])
 
 logger.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
 # first call to torch.cuda.device_count() sets visible gpus, following calls will not change the result
@@ -52,6 +52,7 @@ parser = HfArgumentParser(TrainerArgs)
 
 parser.add_argument('--rwkv_tokenizer', type=str, default=None, help='path or name of pre-trained HF Tokenizer')
 parser.add_argument('--task_name', type=str, help="Task name, wikitext, ...")
+parser.add_argument('--tokenized_dataset', type=str, help="Tokenized dataset, ...", default=None)
 parser.add_argument('--validate_only', action='store_true', default=False,
                     help='Skip training and run only validation. (default: False)')
 parser.add_argument('--working_dir', type=str, default='.',
@@ -90,12 +91,13 @@ parser.add_argument('--alpha_distil', type=float, default=None, help='')
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--block_size', type=int, default=None, help='number of real tokens in block')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
-parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
+parser.add_argument('--n_heads', type=int, default=None, help='number of heads in associative matrix')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
 parser.add_argument('--max_val_segments', type=int, default=1, help='maximal segment number on validation')
 parser.add_argument('--vary_n_segments', action='store_true', default=False, help='Randomly choose segment number from 1 to max_n_segments')
 parser.add_argument('--random_segment_size', action='store_true', default=False, help='Randomly choose segment size from input_size to max_n_segments * input_size with powers of 2')
 parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
+parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
 parser.add_argument('--sum_loss', action='store_true', default=False,
                     help='with this flag task loss from all segments is summed')
 parser.add_argument('--bptt_depth', type=int, default=-1, help='max number of previous segments in gradient computation.')
@@ -116,7 +118,8 @@ parser.add_argument('--k2', type=int, default=-1, help='number of last segments 
 parser.add_argument('--freeze_model_weights', action='store_true', default=False,
                     help='Stop training all model weights except memory layers')
 parser.add_argument('--backbone_cpt', type=str, default=None, help='backbone model checkpoint path')
-
+parser.add_argument('--no_denom', action='store_true', default=None,
+                    help='use no denominator in ARMT')
 
 # tokenizer
 # todo: add wordpiece tokenizers support?
@@ -145,6 +148,13 @@ parser.add_argument('--adapter_dropout', type=float, default=0.1, help='')
 parser.add_argument('--adapter_scale', type=float, default=4.0, help='')
 
 parser.add_argument('--report_to', type=str, default='wandb', help='')
+
+
+parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
+parser.add_argument('--layers_attr', type=str, default=None, help='attribute of model, which contains layers')
+
+parser.add_argument('--freeze_mem', action='store_true', default=False,
+                    help='Freeze memory parameters in ARMT')
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -193,16 +203,19 @@ if __name__ == '__main__':
     logger.info(f'preparing dataset for {args.task_name}')
 
     with accelerator.main_process_first():
-        if 'wikitext' in args.task_name:
+        if args.tokenized_dataset is not None:
+            tokenized_datasets = datasets.load_dataset(args.tokenized_dataset)
+            tokenized_datasets.remove_columns('text')
+        elif 'wikitext' in args.task_name:
             
             def process_unk(x):
                 x['text'] = x['text'].replace('<unk>', tokenizer.unk_token)
                 return x
     
-            raw_datasets = datasets.load_dataset('wikitext', args.task_name)
+            raw_datasets = datasets.load_dataset('Salesforce/wikitext', args.task_name)
 
             # should it really be like this?
-            if 'wikitext-2' not in args.task_name:
+            if 'wikitext-2' not in args.task_name and tokenizer.unk_token is not None:
                 raw_datasets = raw_datasets.map(process_unk)
             column_names = raw_datasets["train"].column_names
             text_column_name = "text" if "text" in column_names else column_names[0]
@@ -233,7 +246,7 @@ if __name__ == '__main__':
 
     def group_texts(examples, block_size, history_size=None):
         concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
+        total_length = len(concatenated_examples['input_ids'])
 
         if history_size is None:
             result = {
@@ -242,20 +255,24 @@ if __name__ == '__main__':
             }
         else:
             result = {
-                k: [t[max({0, i - history_size - block_size}) : i] for i in range(history_size + block_size, total_length, block_size)]
+                k: [t[i - history_size - block_size : i] for i in range(history_size + block_size, total_length, block_size)]
                 for k, t in concatenated_examples.items()
             }
+            for i in range(len(result['input_ids'])):
+                if len(result['input_ids'][i]) != history_size + block_size:
+                    print(i, len(result['input_ids'][i]), history_size, block_size)
+                    assert False
         result["labels"] = result["input_ids"].copy()
         return result
 
     id_pad_value = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     if args.sliding_window:
         def collate_fn(batch):
-            input_ids = [torch.tensor(b['input_ids']) for b in batch]
+            input_ids = [torch.tensor(b['input_ids']).long() for b in batch]
             input_lens = [el.shape[-1] for el in input_ids]
 
-            labels = [torch.tensor(b['labels']) for b in batch]
-            attention_mask = [torch.tensor(b['attention_mask']) for b in batch]
+            labels = [torch.tensor(b['labels']).long() for b in batch]
+            attention_mask = [torch.tensor(b['attention_mask']).long() for b in batch]
             input_ids = pad_sequence(input_ids, padding_value=id_pad_value).T
             labels = pad_sequence(labels, padding_value=-100).T
             attention_mask = pad_sequence(attention_mask, padding_value=0).T
@@ -284,9 +301,9 @@ if __name__ == '__main__':
             return collated
     else:
         def collate_fn(batch, valid=False):
-            input_ids = [torch.tensor(b['input_ids'][::-1]) for b in batch]
-            labels = [torch.tensor(b['labels'][::-1]) for b in batch]
-            attention_mask = [torch.tensor(b['attention_mask'][::-1]) for b in batch]
+            input_ids = [torch.tensor(b['input_ids'][::-1]).long() for b in batch]
+            labels = [torch.tensor(b['labels'][::-1]).long() for b in batch]
+            attention_mask = [torch.tensor(b['attention_mask'][::-1]).long() for b in batch]
             input_ids = pad_sequence(input_ids, padding_value=id_pad_value).T.flip(1)
             labels = pad_sequence(labels, padding_value=-100).T.flip(1)
             attention_mask = pad_sequence(attention_mask, padding_value=0).T.flip(1)
@@ -328,10 +345,12 @@ if __name__ == '__main__':
             return collated
 
     with accelerator.main_process_first():
+        logger.info('starting grouping texts')
         # train_dataset = Dataset.from_dict(group_texts(tokenized_datasets['train'].to_dict(), block_size, history_size))
         train_dataset = tokenized_datasets["train"].map(lambda x: group_texts(x, block_size, history_size),
                                                         batched=True, desc=f"Grouping train in chunks of {block_size} and history {history_size}")
         valid_dataset = Dataset.from_dict(group_texts(tokenized_datasets['validation'].to_dict(), block_size, val_history_size))
+        logger.info('ended grouping texts')
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
     # shuffle train data each epoch (one loop over train_dataset)
     per_worker_batch_size = args.batch_size * args.gradient_accumulation_steps
@@ -344,7 +363,7 @@ if __name__ == '__main__':
     # batch sample i is a continuation of sample i of the previous batch
     class alignedDataLoader(DataLoader):
         def __iter__(self):
-            all_inds = np.arange(len(self.dataset) // self.batch_size * self.batch_size)
+            all_inds = np.arange((len(self.dataset) // self.batch_size) * self.batch_size)
             all_inds = all_inds.reshape(self.batch_size, -1)
             for batch_ind in range(all_inds.shape[1]):
                 batch = [self.dataset[int(ind)] for ind in all_inds[:, batch_ind]]
@@ -354,7 +373,7 @@ if __name__ == '__main__':
     valid_dataloader = None
     logger.info(f'preparing validation data from {args.task_name}')
     valid_dataloader = alignedDataLoader(valid_dataset, batch_size=per_worker_batch_size,
-                                         collate_fn=lambda x: collate_fn(x, valid=True), shuffle=False, drop_last=True, **kwargs)
+                                         collate_fn=lambda x: collate_fn(x, valid=True), shuffle=False, drop_last=False, **kwargs)
 
     # get test dataset
     
@@ -436,9 +455,23 @@ if __name__ == '__main__':
         )
         if args.d_mem is not None:
             mem_cell_args['d_mem'] = args.d_mem
+
+        if args.layers_attr is not None:
+            mem_cell_args['layers_attr'] = args.layers_attr
+        
+        if args.n_heads is not None:
+            mem_cell_args['n_heads'] = args.n_heads
         
         if args.num_mem_tokens is not None:
             mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
+        if args.no_denom is not None:
+            mem_cell_args['use_denom'] = not args.no_denom
+        
+        if args.use_sink:
+            mem_cell_args['use_sink'] = args.use_sink
+
+        if args.freeze_mem is not None:
+            mem_cell_args['freeze_mem'] = args.freeze_mem
 
         cell = memory_cell_cls(**mem_cell_args)
         model = recurrent_wrapper_cls(cell, 
@@ -446,6 +479,7 @@ if __name__ == '__main__':
                                       max_n_segments=args.max_n_segments, 
                                       vary_n_segments=args.vary_n_segments,
                                       k2=args.k2,
+                                      sliding_window=args.prev_seg_kv
         )
 
         if args.distillator_cls is not None:
@@ -455,10 +489,18 @@ if __name__ == '__main__':
 
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':
-            model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
-            cpt = torch.load(model_cpt, map_location='cpu')
-            model.load_state_dict(cpt, strict=False)
-            logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+            try:
+                model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
+                cpt = torch.load(model_cpt, map_location='cpu')
+                model.load_state_dict(cpt)
+                logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+            except Exception as e:
+                import safetensors
+                model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
+                cpt = safetensors.torch.load_file(model_cpt)
+                w = model.load_state_dict(cpt, strict=False)
+                model.memory_cell.model.tie_weights()
+                logger.info(f'loaded rwkv with mis w {w}')
 
 
     def to_freeze(name):
@@ -567,7 +609,6 @@ if __name__ == '__main__':
                       batch_metrics_fn=batch_metrics_fn,
                       forward_kwargs={
                           'input_segmented': getattr(args, 'random_segment_size', False),
-                          'sliding_window': getattr(args, 'prev_seg_kv', False)
                       },
                       generate_kwargs={})
 
@@ -592,7 +633,7 @@ if __name__ == '__main__':
                     metric_on.append(metrics[f'ce_loss_{i}'])
             if args.report_to == 'wandb' and accelerator.is_main_process:
                 table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'valid/ce_loss'])
-                line = trainer.run.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
                 trainer.run.log({'per_segment_eval': line})
         if test_dataloader is not None:
             logger.info('Runnning validation on test data:')
@@ -605,16 +646,36 @@ if __name__ == '__main__':
                     metric_on.append(metrics[f'ce_loss_{i}'])
             if args.report_to == 'wandb' and accelerator.is_main_process:
                 table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'test/ce_loss'])
-                line = trainer.run.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
                 trainer.run.log({'per_segment_test': line})
         trainer.save_metrics(save_path=args.model_path)
     else:
         # run validation, do not write to tensorboard
-        logger.info('Running validation on train set:')
-        trainer.validate(train_dataloader, split='train', write_tb=True)
+        # logger.info('Running validation on train set:')
+        # trainer.validate(train_dataloader, split='train', write_tb=True)
         if valid_dataloader is not None:
-            logger.info('Running validation on valid data:')
-            trainer.validate(valid_dataloader, write_tb=False, split='valid')
+            logger.info('Runnning validation on valid data:')
+            metrics = trainer.validate(valid_dataloader, write_tb=False, split='valid')
+            evaluated_on = []
+            metric_on = []
+            for i in range(args.max_val_segments):
+                if f'ce_loss_{i}' in metrics:
+                    evaluated_on.append(i)
+                    metric_on.append(metrics[f'ce_loss_{i}'])
+            if args.report_to == 'wandb' and accelerator.is_main_process:
+                table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'valid/ce_loss'])
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
+                trainer.run.log({'per_segment_eval': line})
         if test_dataloader is not None:
             logger.info('Runnning validation on test data:')
-            trainer.validate(test_dataloader, write_tb=False, split='test')
+            metrics = trainer.validate(test_dataloader, write_tb=False, split='test')
+            evaluated_on = []
+            metric_on = []
+            for i in range(args.max_val_segments):
+                if f'ce_loss_{i}' in metrics:
+                    evaluated_on.append(i)
+                    metric_on.append(metrics[f'ce_loss_{i}'])
+            if args.report_to == 'wandb' and accelerator.is_main_process:
+                table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'test/ce_loss'])
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
+                trainer.run.log({'per_segment_test': line})
