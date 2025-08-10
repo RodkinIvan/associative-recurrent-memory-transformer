@@ -38,6 +38,7 @@ NUM_LAYERS=4
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
 cd ../..
+
 MODEL_CFG=~/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
 
@@ -81,6 +82,7 @@ MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
+
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $((29500+$N)) run_finetuning_cell_autom.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/armt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_act$ACT_TYPE_shift$SHIFT/run_$N \

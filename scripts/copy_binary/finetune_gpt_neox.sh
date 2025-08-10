@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 export CUDA_VISIBLE_DEVICES=0
-NP=1 # ./test_bert_sparse_pretrain_train_valid.sh
+NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
 cd ../..
@@ -21,7 +21,7 @@ TBS=256
 MAX_N_SEGMENTSS=(10)
 MAX_VAL_SEGMENTSS=(10)
 SHIFTS=(1)
-LRS=(3e-4)      
+LRS=(3e-4)
 BSS=(128)
 
 INPUT_TOKENS=20

@@ -52,7 +52,6 @@ class ACT_basic(nn.Module):
         # for l in range(self.num_layers):
         rest = None
 
-
         while( ((halting_probability<self.threshold) & (n_updates < max_hop)).byte().any()):
             # Add timing signal
             # state = state + time_enc[:, :inputs.shape[1], :].type_as(inputs.data)
@@ -99,8 +98,6 @@ class ACT_basic(nn.Module):
                     state = state[0]
 
             # update running part in the weighted state and keep the rest
-            # print(state.shape, previous_state.shape, update_weights.shape)
-            # print(state.dtype, previous_state.dtype, update_weights.dtype)
             previous_state = ((state * update_weights.unsqueeze(-1)) + (previous_state * (1 - update_weights.unsqueeze(-1))))
             ## previous_state is actually the new_state at end of hte loop 
             ## to save a line I assigned to previous_state so in the next 

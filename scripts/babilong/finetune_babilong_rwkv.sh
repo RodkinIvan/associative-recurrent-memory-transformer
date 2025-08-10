@@ -72,6 +72,7 @@ ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${
 if [[ j -gt 0 ]]
 then
     MODEL_CPT=/mnt/data/users/ivan.rodkin/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTSS[j-1]}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N 
+
 else
     MODEL_CPT=None
 fi

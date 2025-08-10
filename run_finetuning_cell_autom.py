@@ -120,6 +120,7 @@ parser.add_argument('--max_hop', type=int, default=4, help='number of cycles in 
 parser.add_argument('--time_penalty', type=float, default=0.0, help='time penalty coefficient in ACT loss')
 parser.add_argument('--act_type', type=str, default=None, help='what is in ACT (options: layer, associative)')
 
+
 parser.add_argument('--act_format', type=str, default=None, help='')
 
 
@@ -167,11 +168,11 @@ parser.add_argument('--optimizer', type=str, default='AdamW', help='optimizer na
 parser.add_argument('--weight_decay', type=float, default=0.0, help='optimizer weight decay (default: 0.0)')
 parser.add_argument('--scale_parameter', action='store_true', default=False,
                     help='Adafactor scale_parameter (default: False)')
-                
 parser.add_argument('--relative_step', action='store_true', default=False,
                     help='Adafactor relative_step (default: False)')
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
+
                     
 parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 parser.add_argument('--predict_from_mask', action='store_true', default=False,
@@ -223,6 +224,7 @@ if __name__ == '__main__':
     # else:
     #     tokenizer = AutoTokenizer.from_pretrained(args.from_pretrained)
 
+
     left = None
     right = None
     rule_left = None
@@ -246,6 +248,7 @@ if __name__ == '__main__':
                 if args.repeat_state:
                     batch[i] = {
                         # concatenate input_ids_t for the corresponding steps
+
                         'input_ids': [i for t in range(steps-1) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}'] + [sep_token,] + b[f'input_ids_{t+1}']]
                     }
                     if args.learn_rule:
@@ -269,6 +272,7 @@ if __name__ == '__main__':
                         # concatenate input_ids_t for the corresponding steps
                         'input_ids': [i for t in range(steps) if f'input_ids_{t}' in b for i in [sep_token,] + b[f'input_ids_{t}']]
                     }
+
                     if args.input_rule:
                         batch[i]['input_ids'] = b['rule_ids'] + batch[i]['input_ids']
                     if args.learn_rule:
@@ -288,6 +292,7 @@ if __name__ == '__main__':
                 
             input_ids = torch.stack([torch.tensor(b['input_ids']) for b in batch], dim=0)
             labels = torch.stack([torch.tensor(b['labels']) for b in batch], dim=0)
+
             if args.learn_rule:
                 input_ids[:, rule_left:rule_right] = rule_token
             if args.predict_from_mask:
@@ -307,18 +312,19 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError(f'Unknown model type {args.model_type}')
 
-
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
     # get train dataset
     logger.info(f'preparing dataset for: {args.task_name}')
     with accelerator.main_process_first():
         train_dataset = load_dataset(args.dataset_path, split='train')
+
         args.rule_len = len(train_dataset[0]['rule_ids'])
         logger.info(f'Rule len: {args.rule_len}')
         valid_dataset = load_dataset(args.dataset_path, split='validation')
         test_dataset = load_dataset(args.dataset_path, split='test')
 
         args.array_size = len(train_dataset[0]['input_ids_0'])
+
 
     if args.learn_rule and args.rule_last:
         right = -args.rule_len
@@ -358,6 +364,7 @@ if __name__ == '__main__':
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
+
         if 'lstm' in args.model_path:
             model_cfg = model_cfg.to_dict()
             model_cfg['act_on'] = args.act_on
@@ -378,6 +385,7 @@ if __name__ == '__main__':
     
     ## load cpt of backbone model
     if args.backbone_cpt:
+
         # backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
         # cpt = torch.load(backbone_cpt, map_location='cpu')
         # model.load_state_dict(cpt['model_state_dict'])
@@ -444,6 +452,7 @@ if __name__ == '__main__':
                                       time_penalty=args.time_penalty
         )
                                     
+
         if 'armt' in args.model_path:
 
             assert args.num_timesteps == args.num_test_timesteps
@@ -520,7 +529,6 @@ if __name__ == '__main__':
             #     data['generation_outputs'] = [data['generation_outputs'][i, mask] for i, mask in enumerate(batch['labels_mask'])]
         # if args.model_type == 'encoder':
             
-        ##### booydar
         data['predictions'] = torch.argmax(output['logits'].detach(), dim=-1)
         # data['labels'] = batch['labels']
         for key in batch.keys():
@@ -548,6 +556,7 @@ if __name__ == '__main__':
         # compute metrics based on stored labels, predictions, ...
         
         metrics = {}
+
         l = data['labels'].size(1)
         y, p = data['labels'][:, l+left:l+right], data['predictions'][:, left-1:right-1]
         if args.learn_rule:

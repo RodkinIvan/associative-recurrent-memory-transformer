@@ -99,6 +99,7 @@ parser.add_argument('--max_val_segments', type=int, default=1, help='maximal seg
 parser.add_argument('--vary_n_segments', action='store_true', default=False, help='Randomly choose segment number from 1 to max_n_segments')
 parser.add_argument('--random_segment_size', action='store_true', default=False, help='Randomly choose segment size from input_size to max_n_segments * input_size with powers of 2')
 parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
+parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
 parser.add_argument('--sum_loss', action='store_true', default=False,
                     help='with this flag task loss from all segments is summed')
 parser.add_argument('--bptt_depth', type=int, default=-1, help='max number of previous segments in gradient computation.')
@@ -153,6 +154,9 @@ parser.add_argument('--report_to', type=str, default='wandb', help='')
 
 parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
 parser.add_argument('--layers_attr', type=str, default=None, help='attribute of model, which contains layers')
+
+parser.add_argument('--freeze_mem', action='store_true', default=False,
+                    help='Freeze memory parameters in ARMT')
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -213,7 +217,7 @@ if __name__ == '__main__':
             raw_datasets = datasets.load_dataset('Salesforce/wikitext', args.task_name)
 
             # should it really be like this?
-            if 'wikitext-2' not in args.task_name:
+            if 'wikitext-2' not in args.task_name and tokenizer.unk_token is not None:
                 raw_datasets = raw_datasets.map(process_unk)
             column_names = raw_datasets["train"].column_names
             text_column_name = "text" if "text" in column_names else column_names[0]
@@ -264,6 +268,7 @@ if __name__ == '__main__':
         return result
 
     id_pad_value = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
+
     def collate_fn(batch, valid=False):
             input_ids = [torch.tensor(b['input_ids'][::-1]).long() for b in batch]
             labels = [torch.tensor(b['labels'][::-1]).long() for b in batch]
@@ -436,6 +441,11 @@ if __name__ == '__main__':
             mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
         if args.no_denom is not None:
             mem_cell_args['use_denom'] = not args.no_denom
+        if args.use_sink:
+            mem_cell_args['use_sink'] = args.use_sink
+
+        if args.freeze_mem is not None:
+            mem_cell_args['freeze_mem'] = args.freeze_mem
 
         cell = memory_cell_cls(**mem_cell_args, segment_size=block_size)
         model = recurrent_wrapper_cls(cell, 
@@ -453,12 +463,12 @@ if __name__ == '__main__':
 
         ## load cpt of rmt
         if args.model_cpt and args.model_cpt != 'None':
-            if 'rwkv' not in args.model_cpt:
+            try:
                 model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
                 cpt = torch.load(model_cpt, map_location='cpu')
                 model.load_state_dict(cpt)
                 logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
-            else:
+            except Exception as e:
                 import safetensors
                 model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
                 cpt = safetensors.torch.load_file(model_cpt)
@@ -597,7 +607,7 @@ if __name__ == '__main__':
                     metric_on.append(metrics[f'ce_loss_{i}'])
             if args.report_to == 'wandb' and accelerator.is_main_process:
                 table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'valid/ce_loss'])
-                line = trainer.run.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
                 trainer.run.log({'per_segment_eval': line})
         if test_dataloader is not None:
             logger.info('Runnning validation on test data:')
@@ -610,16 +620,36 @@ if __name__ == '__main__':
                     metric_on.append(metrics[f'ce_loss_{i}'])
             if args.report_to == 'wandb' and accelerator.is_main_process:
                 table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'test/ce_loss'])
-                line = trainer.run.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
                 trainer.run.log({'per_segment_test': line})
         trainer.save_metrics(save_path=args.model_path)
     else:
         # run validation, do not write to tensorboard
-        logger.info('Running validation on train set:')
-        trainer.validate(train_dataloader, split='train', write_tb=True)
+        # logger.info('Running validation on train set:')
+        # trainer.validate(train_dataloader, split='train', write_tb=True)
         if valid_dataloader is not None:
-            logger.info('Running validation on valid data:')
-            trainer.validate(valid_dataloader, write_tb=False, split='valid')
+            logger.info('Runnning validation on valid data:')
+            metrics = trainer.validate(valid_dataloader, write_tb=False, split='valid')
+            evaluated_on = []
+            metric_on = []
+            for i in range(args.max_val_segments):
+                if f'ce_loss_{i}' in metrics:
+                    evaluated_on.append(i)
+                    metric_on.append(metrics[f'ce_loss_{i}'])
+            if args.report_to == 'wandb' and accelerator.is_main_process:
+                table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'valid/ce_loss'])
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'valid/ce_loss'})
+                trainer.run.log({'per_segment_eval': line})
         if test_dataloader is not None:
             logger.info('Runnning validation on test data:')
-            trainer.validate(test_dataloader, write_tb=False, split='test')
+            metrics = trainer.validate(test_dataloader, write_tb=False, split='test')
+            evaluated_on = []
+            metric_on = []
+            for i in range(args.max_val_segments):
+                if f'ce_loss_{i}' in metrics:
+                    evaluated_on.append(i)
+                    metric_on.append(metrics[f'ce_loss_{i}'])
+            if args.report_to == 'wandb' and accelerator.is_main_process:
+                table = wandb.Table(data=np.vstack([evaluated_on, metric_on]).T, columns=['evaluated_on', 'test/ce_loss'])
+                line = wandb.plot_table("wandb/line/v0", table, {"x":'evaluated_on', "y":'test/ce_loss'})
+                trainer.run.log({'per_segment_test': line})

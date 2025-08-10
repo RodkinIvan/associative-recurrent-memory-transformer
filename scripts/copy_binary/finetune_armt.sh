@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 export CUDA_VISIBLE_DEVICES=0
-NP=1 # ./test_bert_sparse_pretrain_train_valid.sh
+NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
 cd ../..
@@ -36,6 +36,7 @@ NUM_LAYERS=1
 MEMORY_SIZE=16
 D_MEM=32
 LAYERS_ATTR=gpt_neox.layers
+
 
 MAX_HOP=4
 ACT_TYPE=layer
@@ -78,6 +79,7 @@ MODEL_CPT=None
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
+
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29502 run_finetuning_gpt_neox.py \
         --task_name $TASK_NAME \
         --model_path ../runs/lm_long/armt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \

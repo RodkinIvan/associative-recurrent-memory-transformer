@@ -49,7 +49,6 @@ class RWKVModel(torch.nn.Module):
 
     def get_input_embeddings(self):
         return self.model.emb
-    
 class RWKV_v7_tiny(RWKVModel):
     def __init__(self, *args, **kwargs):
         super().__init__()
