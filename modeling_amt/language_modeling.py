@@ -9,9 +9,13 @@ import wandb
 from munch import Munch
 import os
 
-from modeling_amt.act_utils import ACT_basic, gen_timing_signal
-# from baselines.rwkv.language_modeling import RWKVModel
-
+from modeling_amt.act_utils import ACT_basic, gen_timing_signal, ACTForWholeARMT, ACT_transformer, ACT_constant_depth, ACTForWholeARMT_constant_depth
+try:
+    from baselines.rwkv.language_modeling import RWKVModel
+    RWKV_imported = True
+except ImportError:
+    print("*** Can't import RWKV model ***")
+    RWKV_imported = False
 def dpfp(x, nu=1):
   x = torch.cat([r(x), r(-x)], dim=-1)
   x_rolled = torch.cat([x.roll(shifts=j, dims=-1)
@@ -83,6 +87,11 @@ class AssociativeLayerWrapper(torch.nn.Module):
         else:
             self.W_mb = torch.nn.Linear(d_model, n_heads, dtype=layer_dtype)
         torch.nn.init.zeros_(self.W_mv.weight)
+        s = 1/math.sqrt(d_model)
+        # torch.nn.init.uniform_(self.W_mq.weight, -s, s)
+        # torch.nn.init.uniform_(self.W_mk.weight, -s, s)
+        # torch.nn.init.uniform_(self.W_mb.weight, -s, s)
+
 
         # self.ln = torch.nn.LayerNorm(d_model)
 
@@ -93,7 +102,6 @@ class AssociativeLayerWrapper(torch.nn.Module):
         self.correction = correction
         
         self.zero_mem()
-
 
     def _to_heads(self, x):
         bsz, seq_len, d_model = x.shape
@@ -116,8 +124,7 @@ class AssociativeLayerWrapper(torch.nn.Module):
         mq = self.phi(q) # (bsz, n_heads, seq_len, 2 * d_head * nu)
         mq = F.normalize(mq, dim=-1, p=2.0)
         # crutch for dataparallel
-        # mq += 0 * self.W_mb(hidden_states).sum() * self.W_mk(hidden_states).sum() * self.W_mv(hidden_states).sum() 
-
+        # mq += 0 * self.W_mb(hidden_states).sum() * self.W_mk(hidden_states).sum() * self.W_mv(hidden_states).sum()
         num = torch.einsum('ihjk,ihkt->ihjt', mq, self.W_mem)
         if self.use_denom:
             denom = torch.einsum("ihk,ihjk->ihj", self.z, mq)[..., None] + 1e-5
@@ -142,8 +149,18 @@ class AssociativeLayerWrapper(torch.nn.Module):
                 mem_tokens = out[0][:, -self.num_mem_tokens:]
             else:
                 mem_tokens = out[:, -self.num_mem_tokens:]
+
             self.update_mem(mem_tokens)
-            self.first_seg = False
+        return out
+    
+    def forward_no_update(self, hidden_states, *args, **kwargs):
+        if not self.first_seg:
+            hidden_states = self.associate(
+                # self.ln(
+                    hidden_states
+                # )
+            )+ hidden_states
+        out = self.layer(hidden_states, *args, **kwargs)
         return out
     
     def forward_no_update(self, hidden_states, *args, **kwargs):
@@ -161,7 +178,7 @@ class AssociativeLayerWrapper(torch.nn.Module):
         self.W_mem = self.W_mem.to(mem_tokens.device)
         if self.use_denom:
             self.z = self.z.to(mem_tokens.device)
-        k = self._to_heads(self.W_mk(mem_tokens))  # mem_tokens has d_model features, W_mk outputs d_mem features
+        k = self._to_heads(self.W_mk(mem_tokens))
         mk = self.phi(k)
         mk = F.normalize(mk, dim=-1, p=2.0)
 
@@ -201,11 +218,11 @@ class AssociativeLayerWrapper(torch.nn.Module):
             self.z = self.z + (new_info_coef*mk).sum(dim=-2)
         # self.z = self.z + (new_info_coef*mb[..., None]*mk).sum(dim=1)
         self.seg_num += 1
+        self.first_seg = False
 
     def freeze_mem(self):
         self.W_mb.weight.requires_grad = False
         self.W_mb.bias.requires_grad = False
-
         self.W_mq.weight.requires_grad = False
         self.W_mk.weight.requires_grad = False
         self.W_mv.weight.requires_grad = False
@@ -221,6 +238,154 @@ class AssociativeLayerWrapper(torch.nn.Module):
             self.z.requires_grad_(False)
         self.seg_num = 0
 
+    def detach_mem(self):
+        self.W_mem = self.W_mem.detach()
+        if self.use_denom:
+            self.z = self.z.detach()
+
+
+
+
+class AdaptiveAssociativeLayerWrapper(AssociativeLayerWrapper):
+    def __init__(self, 
+                 layer, 
+                 d_model, 
+                 num_mem_tokens, 
+                 d_mem, 
+                 max_hop,
+                 n_heads=1, 
+                 correction=True, 
+                 info=None, 
+                 use_denom=True, 
+                 gating=False,
+                 constant_depth=False,
+                 
+                ) -> None:
+        super().__init__(layer, d_model, num_mem_tokens, d_mem, n_heads, correction, info, use_denom, gating)
+        self.act = ACT_basic(d_model) if not constant_depth else ACT_constant_depth()
+        self.depth = max_hop
+        self.max_length = 1024
+
+        self.timing_signal = gen_timing_signal(self.max_length, d_model)
+        ## for t
+        self.position_signal = gen_timing_signal(self.depth, d_model)
+
+        self.remainders = torch.zeros(1,)
+        self.n_updates = torch.zeros(1,)
+        self.segments_passed = torch.zeros(1,)
+
+    def associate(self, hidden_states):
+        self.remainders = self.remainders.to(hidden_states.device)
+        self.n_updates = self.n_updates.to(hidden_states.device)
+        self.segments_passed = self.segments_passed.to(hidden_states.device)
+        out, (remainders, n_updates) = self.act(
+            state=hidden_states, 
+            inputs=hidden_states, 
+            fn=super().associate,
+            time_enc=self.timing_signal,
+            pos_enc=self.position_signal,
+            max_hop=self.depth
+        )
+        
+        self.remainders = self.remainders + remainders.mean() # 1 - \sum(h_i); L' = L + tau * mean(remainders)
+        self.n_updates = self.n_updates + n_updates.mean()
+        self.segments_passed = self.segments_passed + 1
+        return out
+    
+    def zero_mem(self):
+        self.remainders = torch.zeros(1,)
+        self.n_updates = torch.zeros(1,)
+        self.segments_passed = torch.zeros(1,)
+        return super().zero_mem()
+    
+    def detach_mem(self):
+        self.remainders = torch.zeros(1,)
+        self.n_updates = torch.zeros(1,)
+        self.segments_passed = torch.zeros(1,)
+        return super().detach_mem()
+
+
+
+class AdaptiveAssociativeLayerWrapper2(AssociativeLayerWrapper):
+    def __init__(self, 
+                 layer, 
+                 d_model, 
+                 num_mem_tokens, 
+                 d_mem, 
+                 max_hop,
+                 n_heads=1, 
+                 correction=True, 
+                 info=None, 
+                 use_denom=True, 
+                 gating=False,
+                 act_format='linear',
+                 noisy_halting=False,
+                 constant_depth=False,
+                ) -> None:
+        super().__init__(layer, d_model, num_mem_tokens, d_mem, n_heads, correction, info, use_denom, gating)
+
+        if act_format=='transformer':
+            self.act = ACT_transformer(d_model)
+        elif constant_depth:
+            self.act = ACT_constant_depth()
+        elif act_format == 'linear':
+            self.act =  ACT_basic(d_model)
+        else:
+            raise NotImplemetedError
+
+        self.depth = max_hop
+        self.max_length = 1024
+
+        self.noisy_halting = noisy_halting
+
+        self.timing_signal = gen_timing_signal(self.max_length, d_model)
+        ## for t
+        self.position_signal = gen_timing_signal(self.depth, d_model)
+
+        self.remainders = torch.zeros(1,)
+        self.n_updates = torch.zeros(1,)
+        self.segments_passed = torch.zeros(1,)
+
+    def forward(self, hidden_states, *args, **kwargs):
+        self.remainders = self.remainders.to(hidden_states.device)
+        self.n_updates = self.n_updates.to(hidden_states.device)
+        self.segments_passed = self.segments_passed.to(hidden_states.device)
+
+        if self.noisy_halting:
+            kwargs['noisy_halting'] = self.noisy_halting
+        fwd = super().forward_no_update
+        out, (remainders, n_updates) = self.act(
+            *args,
+            state=hidden_states, 
+            inputs=hidden_states, 
+            fn=fwd,
+            time_enc=self.timing_signal,
+            pos_enc=self.position_signal,
+            max_hop=self.depth,
+            **kwargs
+        )
+        if not self.generate_mode:
+            mem_tokens = out[0][:, -self.num_mem_tokens:]
+            # mem_tokens = out[0]
+            self.update_mem(mem_tokens)
+            self.first_seg = False
+        self.remainders = self.remainders + remainders.mean() # 1 - \sum(h_i); L' = L + tau * mean(remainders)
+        self.n_updates = self.n_updates + n_updates.mean()
+        self.segments_passed = self.segments_passed + 1
+        return out
+
+    
+    def zero_mem(self):
+        self.remainders = torch.zeros(1,)
+        self.n_updates = torch.zeros(1,)
+        self.segments_passed = torch.zeros(1,)
+        return super().zero_mem()
+    
+    def detach_mem(self):
+        self.remainders = torch.zeros(1,)
+        self.n_updates = torch.zeros(1,)
+        self.segments_passed = torch.zeros(1,)
+        return super().detach_mem()
 
 
 class AdaptiveAssociativeLayerWrapper(AssociativeLayerWrapper):
@@ -345,7 +510,7 @@ class AssociativeMemoryCell(torch.nn.Module):
     def __init__(self, 
                  base_model, 
                  num_mem_tokens, 
-                 d_mem, 
+                 d_mem,
                  layers_attr: str = 'model.layers', 
                  wrap_pos=False, 
                  correction=True, 
@@ -355,23 +520,30 @@ class AssociativeMemoryCell(torch.nn.Module):
                  freeze_mem=False,
                  act_on=False,
                  max_hop=4,
-                 act_type='associative',
+                 act_type='layer',
+                 act_format='linear',
+                 noisy_halting=False,
+                 constant_depth=False,
                  attend_to_previous_input=False,
-                 use_sink=False
+                 use_sink=False,
+                 **rmt_config
         ):
         super().__init__()
         self.model = base_model
+        
         self.attend_to_previous_input = attend_to_previous_input
         self.previous_input = None
         self.use_sink = use_sink
-
-        self.RWKV_ARMT = False #isinstance(self.model, RWKVModel)
+        
+        self.RWKV_ARMT = isinstance(self.model, RWKVModel) if RWKV_imported else False
 
         self.num_mem_tokens = num_mem_tokens
         self.d_mem = d_mem
         self.d_model = base_model.get_input_embeddings().embedding_dim
         self.W_mem = []
         self.layers = self.model
+
+        self.constant_depth = constant_depth
 
         self.layers_attrs = layers_attr.split('.')
         for i, attr in enumerate(self.layers_attrs):
@@ -387,18 +559,37 @@ class AssociativeMemoryCell(torch.nn.Module):
                 info={'layer': i},
                 n_heads=n_heads,
                 use_denom=use_denom,
-                gating=gating
+                gating=gating,
             )
-            if act_on:
+            if act_on and act_type != 'model':
+                kw['act_format'] = act_format
+            if act_on and act_type == 'model' and act_format != 'linear':
+                raise NotImplementedError
+            if act_on and (act_type != 'model'):
                 kw['max_hop'] = max_hop
+                kw['constant_depth'] = self.constant_depth
+                kw['act_format'] = act_format
+            if act_on and noisy_halting:
+                kw['noisy_halting'] = noisy_halting
             if not act_on:
                 self.layers[i] = AssociativeLayerWrapper(**kw)
             elif act_type == 'associative':
                 self.layers[i] = AdaptiveAssociativeLayerWrapper(**kw)
             elif act_type == 'layer':
                 self.layers[i] = AdaptiveAssociativeLayerWrapper2(**kw)
+            elif act_type == 'model':
+                self.layers[i] = AssociativeLayerWrapper(**kw)
             else:
                 raise f'Unknown ACT type: {act_type}'
+
+        if act_type == 'model':
+            self.act = ACTForWholeARMT(self.d_model) if not self.constant_depth else ACTForWholeARMT_constant_depth()
+            self.depth = max_hop
+            self.max_length = 1024
+            self.timing_signal = gen_timing_signal(self.max_length, self.d_model)
+            self.position_signal = gen_timing_signal(self.depth, self.d_model)
+        self.act_type = act_type
+
         self.create_memory(num_mem_tokens)
         self.wrap_pos = wrap_pos
         self.act_on = act_on
@@ -418,6 +609,7 @@ class AssociativeMemoryCell(torch.nn.Module):
         embeddings = self.model.get_input_embeddings()
         memory_dim =  getattr(self.model.config, 'n_embd', self.model.config.hidden_size)
         memory_weights = torch.randn((num_mem_tokens, memory_dim), device=embeddings.weight.data.device, dtype=embeddings.weight.data.dtype) * embeddings.weight.data.std()
+
         self.register_parameter('memory', torch.nn.Parameter(memory_weights, requires_grad=True))
         if self.use_sink:
             self.sink = torch.nn.Parameter(torch.randn((1, memory_dim), device=embeddings.weight.data.device, dtype=embeddings.weight.data.dtype), requires_grad=True)
@@ -447,18 +639,38 @@ class AssociativeMemoryCell(torch.nn.Module):
     def zero_mem(self):
         for layer in self.layers:
             layer.zero_mem()
-            pass
         self.previous_input = None
+    
+    def detach_mem(self):
+        for layer in self.layers:
+            layer.detach_mem()
+            pass
 
-    def forward(self, input_ids, labels=None, labels_mask=None, zero_mem=False, **kwargs):
+    def forward(self, input_ids, labels=None, labels_mask=None, zero_mem=False, attention_mask=None, **kwargs):
+        if self.act_type != 'model':
+            out = self.forward_with_update(input_ids, labels, labels_mask, zero_mem, attention_mask=attention_mask, **kwargs)
+        else:
+            seg_kwargs = self.process_input(input_ids=input_ids, 
+                                            labels=labels, 
+                                            labels_mask=labels_mask, 
+                                            zero_mem=zero_mem, 
+                                            attention_mask=attention_mask, 
+                                            **kwargs
+                                        )
+            out = self.gptneox_forward_act(**seg_kwargs)
+            out = self.process_output(out, labels=labels, labels_mask=labels_mask)
+        return out
+
+    def forward_with_update(self, input_ids, labels=None, labels_mask=None, zero_mem=False, **kwargs):
         current_input_ids = input_ids.clone()
         if self.attend_to_previous_input and self.previous_input is not None:
             input_ids = torch.cat([self.previous_input, input_ids], dim=1)
         
         if zero_mem:
             self.zero_mem()
-        seg_kwargs = self.process_input(input_ids, **kwargs)
 
+        seg_kwargs = self.process_input(input_ids, **kwargs)
+        
         if self.RWKV_ARMT and not self.layers[0].generate_mode:
             input1 = dict()
             input2 = dict()
@@ -509,8 +721,8 @@ class AssociativeMemoryCell(torch.nn.Module):
             if kwargs.get('prev_attn_mask') is not None:
                 prev_seg_attn_mask = self.pad_prev_seg_attn_mask(kwargs['prev_attn_mask'], dtype=inputs_embeds.dtype)
                 seg_kwargs['attention_mask'] = torch.cat([prev_seg_attn_mask, seg_kwargs['attention_mask']], dim=-1)
-            if 'prev_attn_mask' in seg_kwargs:
-                seg_kwargs.pop('prev_attn_mask')
+        if 'prev_attn_mask' in seg_kwargs:
+            seg_kwargs.pop('prev_attn_mask')
         seg_kwargs['output_hidden_states'] = True
 
         if self.wrap_pos:
@@ -566,8 +778,7 @@ class AssociativeMemoryCell(torch.nn.Module):
             return mask.to(dtype)
     
     def process_output(self, model_outputs, labels, labels_mask, **kwargs):
-        
-
+  
         if (self.num_mem_tokens not in {0, None}) and not self.RWKV_ARMT:
             out = CausalLMOutputWithCrossAttentions()
             out['logits'] = model_outputs.logits[:, int(self.use_sink):-self.num_mem_tokens]
@@ -600,7 +811,9 @@ class AssociativeMemoryCell(torch.nn.Module):
 
         if kwargs.get('use_cache', False):
             out['past_key_values'] = model_outputs.past_key_values
-        
+        if self.act_on and self.act_type == 'model':
+            out['remainders'] = model_outputs['remainders']
+            out['n_updates'] = model_outputs['n_updates']
         return out
     
     def generate(self, input_ids, attention_mask, zero_mem=False, **generate_kwargs):
@@ -682,6 +895,58 @@ class AssociativeMemoryCell(torch.nn.Module):
         return generated_ids
             
 
+    def apply_layers(self, hidden_states, causal_mask, position_ids, cache_position, position_embeddings, update_mem=True):
+        if not update_mem:
+            tmp = []
+            for i in range(len(self.layers)):
+                tmp.append(self.layers[i].forward)
+                self.layers[i].forward = self.layers[i].forward_no_update
+
+        for layer in self.layers:
+            hidden_states = layer(
+                    hidden_states,
+                    attention_mask=causal_mask,
+                    position_ids=position_ids,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                )[0]
+
+        if not update_mem:
+            for i in range(len(self.layers)):
+                self.layers[i].forward = tmp[i]
+        return hidden_states
+        
+    
+    def gptneox_forward_act(self, inputs_embeds, labels=None, labels_mask=None, zero_mem=False, attention_mask=None, **kwargs):
+            
+            drop = self.model.gpt_neox.emb_dropout
+            hidden_states = drop(inputs_embeds)
+            seq_length = hidden_states.shape[1]
+            cache_position = torch.arange(0, seq_length, device=hidden_states.device)
+            position_ids = cache_position.unsqueeze(0)
+
+            position_embeddings = self.model.gpt_neox.rotary_emb(hidden_states, position_ids)
+            causal_mask = self.model.gpt_neox._update_causal_mask(
+                attention_mask, hidden_states, cache_position, None, False
+            )
+
+            out, (remainders, n_updates) = self.act(
+                state=hidden_states,
+                inputs=hidden_states,
+                fn_no_update=lambda *args, **kwargs: self.apply_layers(*args, **kwargs, update_mem=False),
+                fn_update=self.apply_layers,
+                time_enc=self.timing_signal,
+                pos_enc=self.position_signal,
+                max_hop=self.depth,
+                causal_mask=causal_mask,
+                position_ids=position_ids,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings
+            )
+            hidden_states = self.model.gpt_neox.final_layer_norm(out)
+
+            lm_logits = self.model.embed_out(hidden_states)
+            return Munch(logits=lm_logits, n_updates=n_updates, remainders=remainders)
 
 class AssociativeRecurrentWrapper(torch.nn.Module):
     def __init__(self, memory_cell, **rmt_kwargs):
@@ -689,11 +954,10 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         
         self.memory_cell = memory_cell
         self.rmt_config = rmt_kwargs
+        self.last_state = None
 
     def gradient_checkpointing_enable(self, *args, **kwargs):
         self.memory_cell.model.gradient_checkpointing_enable(*args, **kwargs)
-    
-    
 
     def process_segment(self, segment_kwargs, next_seg_len=None):
         sliding_window = self.rmt_config['sliding_window'] if 'sliding_window' in self.rmt_config else False
@@ -710,6 +974,8 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         if sliding_window or attend_to_previous_input:
             segment_kwargs['attention_mask'] = attn_mask_to_4d(attn_mask, upper=False, query_len=seg_len)
         
+        if 'state' in segment_kwargs and segment_kwargs['state'] is None:
+            segment_kwargs.pop('state')
         
         num_mem_tokens = self.memory_cell.num_mem_tokens
         cell_out = self.memory_cell(**segment_kwargs)
@@ -740,7 +1006,7 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         if state is not None:
             next_segment_kwargs['state'] = state
         return cell_out, next_segment_kwargs
-    
+
     def forward(self, 
                 input_ids, 
                 labels=None, 
@@ -751,6 +1017,7 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                 output_hidden_states=None,
                 input_segmented=False,
                 output_only_last_segment=False,
+                use_previous_batch_state=torch.zeros(1),
                 num_items_in_batch=None,  # Added to handle HF Trainer compatibility
                 **kwargs  # Added to handle any other unexpected kwargs
                 ):
@@ -770,8 +1037,13 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             segmented = self.segment(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels, labels_mask=labels_mask)
         
         cell_outputs = []
-        self.memory_cell.zero_mem()
-        next_seg_kwargs = dict()
+        if not use_previous_batch_state.all() or self.last_state is None:
+            self.memory_cell.zero_mem()
+            state = None
+        else: 
+            self.memory_cell.detach_mem()
+            state = self.last_state
+        next_seg_kwargs = dict(state=state)
         for seg_num, segment in enumerate(segmented):
             if seg_num != len(segmented) - 1:
                 next_seg_len = segmented[seg_num + 1]['input_ids'].size(-1)
@@ -790,6 +1062,10 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                                    output_attentions=output_attentions, 
                                    output_hidden_states=output_hidden_states,
                                    num_items_in_batch=kwargs.get('num_items_in_batch'))
+        
+        if not self.training:
+            self.memory_cell.zero_mem()
+            self.last_state = None
         return out
 
     def segment(self, **kwargs):
@@ -826,6 +1102,7 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         full_logits = torch.cat([o.logits for o in cell_outputs], dim=1)
         
         labels = kwargs.get('labels')
+        labels = labels[:, -full_logits.size(1):]
         if labels is not None:
             labels = labels[:, -full_logits.size(1):]
             shift_labels = labels[..., 1:].contiguous()
@@ -834,6 +1111,7 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             flat_logits = shift_logits.view(-1, shift_logits.size(-1))
             
             labels_mask = kwargs.get('labels_mask')
+            labels_mask = labels_mask[:, -full_logits.size(1):]
             if labels_mask is not None:
                 labels_mask = labels_mask[:, -full_logits.size(1):]
                 shift_mask = labels_mask[..., :-1].contiguous()
@@ -874,16 +1152,19 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         n_updates = []
         act_on = self.rmt_config['act_on'] if 'act_on' in self.rmt_config else False
         if act_on:
-
+          if self.memory_cell.act_type != 'model':
             for layer in self.memory_cell.layers:
                 remainders.append(layer.remainders / layer.segments_passed)
                 n_updates.append(layer.n_updates / layer.segments_passed)
             remainders = torch.mean(torch.stack(remainders, dim=0))
             n_updates = torch.mean(torch.stack(n_updates, dim=0))
-            out['n_updates'] = n_updates.detach().cpu()
-            out['remainders'] = remainders.detach().cpu()
-            time_penalty = self.rmt_config['time_penalty']
-            out['loss'] = out['loss'] + time_penalty * remainders
+          else:
+            remainders = torch.mean(torch.stack([o['remainders'] for o in cell_outputs], dim=0))
+            n_updates = torch.mean(torch.stack([o['n_updates'] for o in cell_outputs], dim=0))
+          out['n_updates'] = n_updates.detach().cpu()
+          out['remainders'] = remainders.detach().cpu()
+          time_penalty = self.rmt_config['time_penalty']
+          out['loss'] = out['loss'] + time_penalty * remainders
         
         return out 
     

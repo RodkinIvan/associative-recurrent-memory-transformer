@@ -1,7 +1,20 @@
+wandb
 transformers
-tensorboard
-rouge_score
-accelerate
 datasets
-nltk
-six
+accelerate
+deepspeed
+tensorboard
+munch
+peft
+ipywidgets
+ipykernel
+bitsandbytes
+einops
+ninja
+tqdm
+lightning
+-i https://download.pytorch.org/whl/cu121
+torch==2.3.1
+torchvision
+triton==2.3.1
+fvcore

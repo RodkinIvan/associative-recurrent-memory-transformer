@@ -13,7 +13,7 @@ import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 import wandb
-
+import os
 from transformers.optimization import get_scheduler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm.auto import tqdm
@@ -225,7 +225,8 @@ class Trainer:
             self.tb = SummaryWriter(log_dir=self.args.model_path)
 
         if self.accelerator.is_main_process and args.report_to == 'wandb':
-            self.run = wandb.init(name=f'{args.num_mem_tokens}mem_{args.max_n_segments}seg')
+            wandb_name = f'{args.num_mem_tokens}mem_{args.max_n_segments}seg' if os.environ.get('WANDB_NAME') is None else os.environ.get('WANDB_NAME')
+            self.run = wandb.init(name=wandb_name)
 
         # move model to gpu
         self.model.to(self.device)
@@ -381,7 +382,7 @@ class Trainer:
         params = self.model.parameters()
         grad_norm = 0.0
         if self.args.clip_grad_value:
-            self.accelerator.clip_grad_value_(params, self.args.clip_grad_value)
+            self.accelerator.clip_grad_norm_(params, self.args.clip_grad_value)
             grad_norm = self._get_gradients_global_norm()
         elif self.args.clip_grad_norm:
             grad_norm = self.accelerator.clip_grad_norm_(params, self.args.clip_grad_norm)
@@ -704,7 +705,7 @@ class Trainer:
         elif load_path.is_file() and (load_path.parent / 'trainer.pckl').exists():
             trainer_state_path = load_path.parent / 'trainer.pckl'
         if trainer_state_path:
-            trainer_state = torch.load(trainer_state_path, map_location='cpu')
+            trainer_state = torch.load(trainer_state_path, map_location='cpu', weights_only=False)
         if not reset_iteration:
             self.n_iter = trainer_state.get('iteration', 0) + 1  # as saved iteration is already performed
             self.n_epoch = trainer_state.get('epoch', 0)

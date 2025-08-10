@@ -61,6 +61,7 @@ parser.add_argument('--prediction_shift', type=int, default=1, help='num_timeste
 parser.add_argument('--repeat_state', action='store_true', default=False,
                     help='repeat state in the input so the input look like: [s0, s1, s1, s2, s2, s3...]')
 parser.add_argument('--dataset_name', type=str, default="ca", help="path to saved datasets")
+parser.add_argument('--sample_length', action='store_true', default=False, help='sample input length')
 parser.add_argument('--segment_size', type=int, default=128, help='number of useful tokens in a segment')
 parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
 parser.add_argument('--layers_attr', type=str, default=None, help='attribute of model, which contains layers')
@@ -68,6 +69,9 @@ parser.add_argument('--rewrite_setting', action='store_true', default=False,
                     help='keys can occur several times')
 parser.add_argument('--act_on', action='store_true', default=False,
                     help='use Adaptive Computation Time')
+
+parser.add_argument('--act_format',  type=str, default='linear', help='ACT format: linear or transformer')
+
 parser.add_argument('--max_hop', type=int, default=4, help='number of cycles in ACT')
 parser.add_argument('--time_penalty', type=float, default=0.0, help='time penalty coefficient in ACT loss')
 parser.add_argument('--act_type', type=str, default=None, help='what is in ACT (options: layer, associative)')
@@ -104,6 +108,7 @@ parser.add_argument('--relative_step', action='store_true', default=False,
 parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
 
+parser.add_argument('--constant_depth', action='store_true', default=False, help='ACT depth type')
 
 if __name__ == '__main__':
     torch.autograd.set_detect_anomaly(True)
@@ -132,17 +137,20 @@ if __name__ == '__main__':
         "reverse_decimal": "steeldream/decimal",
         "copy_binary": "steeldream/binary",
         "copy_decimal": "steeldream/decimal",
+        "addition_binary": "steeldream/addition_binary",
+        "addition_decimal": "steeldream/addition_decimal",
     }
     dataset_path = dataset_name_to_path[args.dataset_name]
 
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
     logger.info(f'preparing dataset for: {args.task_name}')
+    logger.info(f'sampling the length of the input: {args.sample_length}')
 
     with accelerator.main_process_first():
         train_dataset = load_dataset(dataset_path, split='train')
         valid_dataset = load_dataset(dataset_path, split='validation')
         test_dataset = load_dataset(dataset_path, split='test')
-        if args.dataset_name == "ca":
+        if args.dataset_name in ["ca", "addition_binary", "addition_decimal"]: 
             args.train_array_size = len(train_dataset[0]['input_ids_0'])
             args.valid_array_size = len(valid_dataset[0]['input_ids_0'])
         elif args.dataset_name in ["reverse_binary", "reverse_decimal", "copy_binary", "copy_decimal"]:
@@ -153,8 +161,8 @@ if __name__ == '__main__':
 
     prepare_run(args, logger, logger_fmt)
 
-    def copy_collate_fn(batch, min_length=5, valid=False, reverse=False):
-        batch_array_size = args.valid_array_size if valid else random.randint(min_length, args.train_array_size) 
+    def copy_collate_fn(batch, min_length=5, array_size=40, sample_length=False, reverse=False):
+        batch_array_size = random.randint(min_length, array_size) if sample_length else array_size
 
         for i, b in enumerate(batch):
             X1 = b['input_ids'][:batch_array_size]
@@ -170,15 +178,13 @@ if __name__ == '__main__':
         attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
     
         labels_mask = torch.zeros_like(input_ids).bool()
-        labels_mask[:, -batch_array_size:] = True
+        labels_mask[:, -batch_array_size-1:] = True
         B, L = input_ids.shape
-        logger.info(L)
         if 'armt' in args.model_path:
             input_ids = input_ids.reshape(B, 2, L // 2)
             labels = labels.reshape(B, 2, L // 2)
             labels_mask = labels_mask.reshape(B, 2, L // 2)
             attention_mask = attention_mask.reshape(B, 2, L // 2)
-            
         collated = {
             'input_ids': input_ids,
             'labels': labels,
@@ -187,11 +193,56 @@ if __name__ == '__main__':
         }
         return collated
 
-    def reverse_collate_fn(batch, min_length=5, valid=False):
-        return copy_collate_fn(batch, min_length=min_length, valid=valid, reverse=True)
+    def reverse_collate_fn(batch, min_length=5, array_size=40, sample_length=False):
+        return copy_collate_fn(batch, min_length, array_size, sample_length, reverse=True)
+        
+    def addition_collate_fn_with_base(base):
+        def addition_collate_fn(batch, min_length=5, array_size=40, sample_length=False):
+            batch_array_size = array_size if sample_length else random.randint(min_length, array_size) 
+            
+            def perform_addition(X1, X2):
+                Y = [0] * (batch_array_size + 1)
+                carry = 0
+                for i in range(batch_array_size):
+                    Y[i] = (X1[i] + X2[i] + carry) % base
+                    carry = (X1[i] + X2[i] + carry) // base
+                Y[-1] = carry
+                return Y
 
-    def ca_collate_fn(batch, valid=False):
-        batch_array_size = args.valid_array_size if valid else args.train_array_size
+            for i, b in enumerate(batch):
+                X1 = b['input_ids_0'][:batch_array_size]
+                X2 = b['input_ids_1'][:batch_array_size]
+                Y = perform_addition(X1, X2)
+                batch[i] = {
+                    'input_ids': [eos_token]*2+ X1 + [sep_token]*2 + X2 + [gen_token] + Y,
+                    'labels': [eos_token]*2 + X1 + [sep_token]*2 + X2 + [gen_token] + Y,
+                    'attention_mask': [1] * (3 * batch_array_size + 6)
+                }
+            
+            input_ids = torch.stack([torch.tensor(b['input_ids']) for b in batch], dim=0)
+            labels = torch.stack([torch.tensor(b['labels']) for b in batch], dim=0)
+            attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
+        
+            labels_mask = torch.zeros_like(input_ids).bool()
+            labels_mask[:, -batch_array_size-2:] = True
+
+            B, L = input_ids.shape
+            if 'armt' in args.model_path:
+                input_ids = input_ids.reshape(B, 3, L // 3)
+                labels = labels.reshape(B, 3, L // 3)
+                labels_mask = labels_mask.reshape(B, 3, L // 3)
+                attention_mask = attention_mask.reshape(B, 3, L // 3)
+            collated = {
+                'input_ids': input_ids,
+                'labels': labels,
+                'attention_mask': attention_mask,
+                'labels_mask': labels_mask,
+            }
+            return collated
+        return addition_collate_fn
+ 
+
+    def ca_collate_fn(batch, sample_length=False, array_size=args.valid_array_size, valid=False):
         for i, b in enumerate(batch):
             steps = args.num_test_timesteps if valid else args.num_timesteps
             shift = args.prediction_shift
@@ -216,7 +267,7 @@ if __name__ == '__main__':
         attention_mask = torch.stack([torch.tensor(b['attention_mask']) for b in batch], dim=0)
         
         labels_mask = torch.zeros_like(input_ids).bool()
-        labels_mask[:, -batch_array_size-1:] = True
+        labels_mask[:, -array_size-1:] = True
         collated = {
             'input_ids': input_ids,
             'labels': labels, 
@@ -231,6 +282,8 @@ if __name__ == '__main__':
         "reverse_decimal": reverse_collate_fn,
         "copy_binary": copy_collate_fn,
         "copy_decimal": copy_collate_fn,
+        "addition_binary": addition_collate_fn_with_base(2),
+        "addition_decimal": addition_collate_fn_with_base(10),
     }
 
     collate_fn = collate_fn_dict[args.dataset_name]
@@ -240,19 +293,42 @@ if __name__ == '__main__':
     per_worker_batch_size = args.batch_size * args.gradient_accumulation_steps
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
 
-    train_dataloader = DataLoader(
-        train_dataset, batch_size=per_worker_batch_size, generator=train_rnd_generator,
-        collate_fn=collate_fn, **kwargs, drop_last=True
-    )
-    valid_dataloader = DataLoader(
-        valid_dataset, batch_size=per_worker_batch_size,
-        collate_fn=lambda x: collate_fn(x, valid=True), **kwargs, drop_last=True
-    )
-    test_dataloader = DataLoader(
-        test_dataset, batch_size=per_worker_batch_size,
-        collate_fn=collate_fn, **kwargs, drop_last=True
-    )
 
+
+
+
+    if args.dataset_name == 'ca':
+        train_dataloader = DataLoader(
+            train_dataset, batch_size=per_worker_batch_size, generator=train_rnd_generator,
+            collate_fn=lambda x: collate_fn(x),
+            **kwargs, drop_last=True
+        )
+        valid_dataloader = DataLoader(
+            valid_dataset, batch_size=per_worker_batch_size,
+            collate_fn=lambda x: collate_fn(x),
+            **kwargs, drop_last=True
+        )
+        test_dataloader = DataLoader(
+            test_dataset, batch_size=per_worker_batch_size,
+            collate_fn=lambda x: collate_fn(x),
+            **kwargs, drop_last=True
+        )
+    else:
+        train_dataloader = DataLoader(
+            train_dataset, batch_size=per_worker_batch_size, generator=train_rnd_generator,
+            collate_fn=lambda x: collate_fn(x, sample_length=args.sample_length, array_size=args.train_array_size),
+            **kwargs, drop_last=True
+        )
+        valid_dataloader = DataLoader(
+            valid_dataset, batch_size=per_worker_batch_size,
+            collate_fn=lambda x: collate_fn(x, sample_length=False, array_size=args.valid_array_size),
+            **kwargs, drop_last=True
+        )
+        test_dataloader = DataLoader(
+            test_dataset, batch_size=per_worker_batch_size,
+            collate_fn=lambda x: collate_fn(x, sample_length=False, array_size=args.valid_array_size),
+            **kwargs, drop_last=True
+        )
     if args.valid_interval is None:
         args.valid_interval = args.log_interval
 
@@ -262,6 +338,15 @@ if __name__ == '__main__':
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
+
+
+        if 'lstm' in args.model_path:
+            model_cfg = model_cfg.to_dict()
+            model_cfg['act_on'] = args.act_on
+            model_cfg['max_hop'] = args.max_hop
+            model_cfg['act_type'] = args.act_type
+            model_cfg['time_penalty'] = args.time_penalty
+
         model = model_cls(config=model_cfg)
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
@@ -287,8 +372,12 @@ if __name__ == '__main__':
     if args.act_on:
         mem_cell_args['act_on'] = args.act_on
         mem_cell_args['max_hop'] = args.max_hop
+        if args.act_format is not None:
+            mem_cell_args['act_format'] = args.act_format
         if args.act_type is not None:
             mem_cell_args['act_type'] = args.act_type
+        if args.constant_depth:
+            mem_cell_args['constant_depth'] = args.constant_depth
 
     if args.num_mem_tokens is not None:
         mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
@@ -369,6 +458,10 @@ if __name__ == '__main__':
             array_size = args.valid_array_size
         if args.dataset_name in ["reverse_binary", "reverse_decimal", "copy_binary", "copy_decimal"]:
             array_size = data['labels'][0].shape[0] // 2 - 1 if 'armt' not in args.model_path else data['labels'][0].shape[-1] - 1
+
+        if args.dataset_name in ["addition_binary", "addition_decimal"]:
+            array_size = data['labels'][0].shape[0] // 3 - 1 if 'armt' not in args.model_path else data['labels'][0].shape[-1] - 1
+
         metrics = {}
         y = data['labels'][:, -array_size:] if 'armt' not in args.model_path else data['labels'][:, -1, -array_size:]
         p = data['predictions'][:, -array_size-1:-1]
@@ -392,6 +485,10 @@ if __name__ == '__main__':
         for i in range(args.max_n_segments):
             if f'ce_loss_{i}' in data:
                 metrics[f'ce_loss_{i}'] = data[f'ce_loss_{i}'].mean().item()
+
+        if args.act_on:
+            metrics['n_updates'] = data['n_updates'].mean().item()
+            metrics['remainders'] = data['remainders'].mean().item()
 
         return metrics
 

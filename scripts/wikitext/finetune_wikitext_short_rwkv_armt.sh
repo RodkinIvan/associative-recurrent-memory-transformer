@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=1
 export RWKV_NO_CUDA=1
 export RWKV_JIT_ON=0
 export WANDB_PROJECT=t5-experiments
 export RWKV_ARMT=1
-NP=2
+NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
+export NCCL_BLOCKING_WAIT=0
 set -e
 cd ../..
 
@@ -29,10 +30,10 @@ TBS=64
 MAX_N_SEGMENTSS=(8)
 MAX_VAL_SEGMENTSS=(16)
 LRS=(1e-4)
-BSS=(2)
+BSS=(4)
 
 
-MODEL_NAME=~/lab/rwkv-x060-173m-pile-20240515-ctx4k.pth
+MODEL_NAME=/mnt/data/users/ivan.rodkin/lab/rwkv-x060-173m-pile-20240515-ctx4k.pth
 TOKENIZER=EleutherAI/pythia-160m
 MEMORY_SIZE=4
 INPUT_TOKENS=128
@@ -114,8 +115,8 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --tokenizer $TOKENIZER \
         --d_mem $D_MEM \
         --n_heads $N_HEADS \
-        --layers_attr model.blocks \
-        --no_denom
+        --layers_attr model.blocks
+        # --no_denom
 done
 done
 done

@@ -619,11 +619,11 @@ class RWKV(L.LightningModule):
                 last_wkv_states: torch.Tensor = None):
         if embs is None:
             B, T = idx.size()
-            assert T <= self.ctx_len, "Cannot forward, model ctx_len is exhausted."
+            # assert T <= self.ctx_len, "Cannot forward, model ctx_len is exhausted."
             x = self.emb(idx)
         else:
             B, T, _ = embs.size()
-            assert T <= self.ctx_len, "Cannot forward, model ctx_len is exhausted."
+            # assert T <= self.ctx_len, "Cannot forward, model ctx_len is exhausted."
             x = embs
 
         # Handle dropout (input)

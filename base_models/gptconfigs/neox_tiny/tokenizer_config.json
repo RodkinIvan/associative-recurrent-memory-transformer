@@ -1,0 +1,8 @@
+{
+  "unk_token": "<unk>",
+  "sep_token": "<sep>",
+  "pad_token": "<pad>",
+  "eos_token": "<eos>",
+  "gen_token": "<gen>",
+  "rule_token": "<rule>"
+}

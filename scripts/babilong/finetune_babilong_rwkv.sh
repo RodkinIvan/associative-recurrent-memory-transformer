@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 
 export WANDB_PROJECT=babilong
-# export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=1
 export RWKV_JIT_ON=0
 export RWKV_NO_CUDA=1
 export CHUNK_LEN=1
-NP=4
+NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 set -e
 cd ../..
 
@@ -29,7 +29,7 @@ MAX_N_SEGMENTSS=(2 3 5 8 16 32)
 MAX_VAL_SEGMENTSS=(2 3 5 8 16 128)
 ITERSS=(5000 10000 10000 10000 10000 10000)
 # ITERSS=(1)
-BSS=(4 2 1 1 1 1)
+BSS=(8 8 8 8 8 8)
 
 
 for (( j=0; j<${#MAX_N_SEGMENTSS[@]}; j++ ))
@@ -46,19 +46,33 @@ LR=1e-04
 
 
 
-for N in 1
+for N in 3
 do
 
 K2=-1   # BPTT unroll length
 
 SAMPLE_SIZE=$(($SEGMENT_SIZE*$MAX_N_SEGMENTS)) # length of task sample in tokens
 TEST_SAMPLE_SIZE=$(($SEGMENT_SIZE*$MAX_VAL_SEGMENTS))
-ACCEL_CONFIG=./accel_configs/deepspeed.yaml
 
+cd accel_configs/
+python create_config.py \
+        --bf16 \
+        --train_batch_size $TBS\
+        --train_micro_batch_size_per_gpu $BS\
+        --gradient_accumulation_steps $GRAD_ACC_STEPS\
+        --np $NP\
+        --gradient_clipping 1.0
+cd ..
+ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml
+# ACCEL_CONFIG=./accel_configs/deepspeed.yaml
+
+
+# SEGMENT_SIZE=$SAMPLE_SIZE
 
 if [[ j -gt 0 ]]
 then
-    MODEL_CPT=~/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTSS[j-1]}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N 
+    MODEL_CPT=/mnt/data/users/ivan.rodkin/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTSS[j-1]}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N 
+
 else
     MODEL_CPT=None
 fi
@@ -67,11 +81,11 @@ echo RUNNING: TASK_DATASET $TASK_DATASET MEMORY_SIZE $MEMORY_SIZE SEGMENT_SIZE $
 echo SAMPLE_SIZE $SAMPLE_SIZE MODEL_NAME $MODEL_NAME LR $LR N $N
 echo gradient accumulation steps $GRAD_ACC_STEPS
 
-accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29701 --mixed_precision fp16 --num_processes $NP run_finetuning_babilong_rmt.py \
+accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29701 --mixed_precision bf16 --num_processes $NP run_finetuning_babilong_rmt.py \
         --task_dataset $TASK_DATASET \
         --noise_dataset $NOISE_DATASET \
-        --babi_path ~/lab/associative-recurrent-memory-transformer/data/tasks_1-20_v1-2/en-10k \
-        --model_path ~/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
+        --babi_path /mnt/data/users/ivan.rodkin/lab/associative-recurrent-memory-transformer/data/tasks_1-20_v1-2/en-10k \
+        --model_path /mnt/data/users/ivan.rodkin/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --memory_cell_cls $MEMORY_CELL \
@@ -96,7 +110,9 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29701 --mixed_
         --seed $(($N+42)) \
         --clip_grad_norm 1.0 \
         --model_cpt $MODEL_CPT \
-        --tokenizer $TOKENIZER
+        --tokenizer $TOKENIZER \
+        --infctx \
+        --infctx_p 0.7
 done
 done
 echo "done"

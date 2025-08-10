@@ -3,16 +3,20 @@ import torch
 from torch.nn import CrossEntropyLoss
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 from munch import Munch
-
+import inspect
 class MemoryCell(torch.nn.Module):
-    def __init__(self, base_model,
-                 ):
+    def __init__(self, base_model, **kwargs):
         super().__init__()
         self.model = base_model
         
         
     def forward(self, input_ids, memory_state=None, **kwargs):
-        out = self.model(input_ids)
+        args = inspect.signature(self.model.forward).parameters
+        model_kwargs = kwargs.copy()
+        for key in kwargs.keys():
+            if key not in args:
+                model_kwargs.pop(key)
+        out = self.model(input_ids, **model_kwargs)
         return out, memory_state
     
     def generate(self, input_ids, memory_state, attention_mask, **generate_kwargs):
@@ -70,6 +74,7 @@ class RecurrentWrapper(torch.nn.Module):
                 attention_mask=None, 
                 output_attentions=None, 
                 output_hidden_states=None,
+                input_segmented=False,
                 ):
         memory_state = None
         segment = dict(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels, labels_mask=labels_mask)
