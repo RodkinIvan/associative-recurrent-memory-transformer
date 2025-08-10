@@ -1,7 +1,7 @@
 # Associative Recurrent Memory Transformer implementation compatible with Hugging Face models
 
 
-ARMT is a memory-augmented segment-level recurrent Transformer. It scales up to 50M tokens being trained only on 16k. 
+ARMT is a memory-augmented segment-level recurrent Transformer. It scales up to 50M tokens being trained only on 16k. It enhances the original RMT with capacious and flexible associative memory and achieves state-of-the-art scores on BABILong benchmark.
 
 >[paper](https://arxiv.org/abs/2407.04841) [code](https://github.com/RodkinIvan/associative-recurrent-memory-transformer/tree/llama_armt) Associative Recurrent Memory Transformer
 
@@ -11,6 +11,9 @@ ARMT is a memory-augmented segment-level recurrent Transformer. It scales up to 
 
 
 We implement our memory mechanism with no changes to Transformer model by adding special memory tokens and linear-attention style associative memory. The model is trained to control both memory operations and sequence representations processing.
+
+![**ARMT**](img/armt.png)
+
 
 
 ## Installation
@@ -37,20 +40,7 @@ bash finetune_armt_llama3.2_pg19_sliding.sh
 
 
 ## Citation
-If you find our work useful, please cite the RMT papers:
-
-```
-@misc{rodkin2025associativerecurrentmemorytransformer,
-      title={Associative Recurrent Memory Transformer}, 
-      author={Ivan Rodkin and Yuri Kuratov and Aydar Bulatov and Mikhail Burtsev},
-      year={2025},
-      eprint={2407.04841},
-      archivePrefix={arXiv},
-      primaryClass={cs.CL},
-      url={https://arxiv.org/abs/2407.04841}, 
-}
-```
-
+If you find our work useful, please cite the RMT and ARMT papers:
 ```
 @inproceedings{
         bulatov2022recurrent,
@@ -82,3 +72,15 @@ If you find our work useful, please cite the RMT papers:
       primaryClass={cs.CL}
 }
 ```
+```
+@misc{rodkin2024associativerecurrentmemorytransformer,
+      title={Associative Recurrent Memory Transformer}, 
+      author={Ivan Rodkin and Yuri Kuratov and Aydar Bulatov and Mikhail Burtsev},
+      year={2024},
+      eprint={2407.04841},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL},
+      url={https://arxiv.org/abs/2407.04841}, 
+}
+```
+
