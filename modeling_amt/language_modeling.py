@@ -476,17 +476,22 @@ class AssociativeMemoryCell(torch.nn.Module):
         self.d_mem = d_mem
         self.d_model = base_model.get_input_embeddings().embedding_dim
         self.W_mem = []
-        self.layers = self.model
 
         self.constant_depth = constant_depth
 
         self.layers_attrs = layers_attr.split('.')
-        for i, attr in enumerate(self.layers_attrs):
-            self.layers = getattr(self.layers, attr)
+
+        def _get_layers_from_model(model_root):
+            layers_obj = model_root
+            for attr in self.layers_attrs:
+                layers_obj = getattr(layers_obj, attr)
+            return layers_obj
+
+        layers = _get_layers_from_model(self.model)
         
-        for i in range(len(self.layers)):
+        for i in range(len(layers)):
             kw = dict(
-                layer=self.layers[i], 
+                layer=layers[i], 
                 d_model=self.d_model, 
                 num_mem_tokens=self.num_mem_tokens, 
                 d_mem=self.d_mem,
@@ -507,13 +512,13 @@ class AssociativeMemoryCell(torch.nn.Module):
             if act_on and noisy_halting:
                 kw['noisy_halting'] = noisy_halting
             if not act_on:
-                self.layers[i] = AssociativeLayerWrapper(**kw)
+                layers[i] = AssociativeLayerWrapper(**kw)
             elif act_type == 'associative':
-                self.layers[i] = AdaptiveAssociativeLayerWrapper(**kw)
+                layers[i] = AdaptiveAssociativeLayerWrapper(**kw)
             elif act_type == 'layer':
-                self.layers[i] = AdaptiveAssociativeLayerWrapper2(**kw)
+                layers[i] = AdaptiveAssociativeLayerWrapper2(**kw)
             elif act_type == 'model':
-                self.layers[i] = AssociativeLayerWrapper(**kw)
+                layers[i] = AssociativeLayerWrapper(**kw)
             else:
                 raise f'Unknown ACT type: {act_type}'
 
@@ -532,11 +537,14 @@ class AssociativeMemoryCell(torch.nn.Module):
             self.wrap_positional_embeddings(num_mem_tokens)
         
         if freeze_mem:
-            for layer in self.layers:
+            for layer in _get_layers_from_model(self.model):
                 layer.freeze_mem()
+
+        # Expose a resolver without registering layers as a submodule to avoid shared tensor aliases
+        self.get_layers = lambda: _get_layers_from_model(self.model)
     
     def generate_mode(self, is_on):
-        for layer in self.layers:
+        for layer in self.get_layers():
             layer.generate_mode = is_on
     
     def create_memory(self, num_mem_tokens):
@@ -572,12 +580,12 @@ class AssociativeMemoryCell(torch.nn.Module):
         return memory, sink
 
     def zero_mem(self):
-        for layer in self.layers:
+        for layer in self.get_layers():
             layer.zero_mem()
         self.previous_input = None
     
     def detach_mem(self):
-        for layer in self.layers:
+        for layer in self.get_layers():
             layer.detach_mem()
             pass
 
@@ -606,7 +614,8 @@ class AssociativeMemoryCell(torch.nn.Module):
 
         seg_kwargs = self.process_input(input_ids, **kwargs)
         
-        if self.RWKV_ARMT and not self.layers[0].generate_mode:
+        layers = self.get_layers()
+        if self.RWKV_ARMT and not layers[0].generate_mode:
             input1 = dict()
             input2 = dict()
             for item in seg_kwargs:
@@ -837,7 +846,7 @@ class AssociativeMemoryCell(torch.nn.Module):
                 tmp.append(self.layers[i].forward)
                 self.layers[i].forward = self.layers[i].forward_no_update
 
-        for layer in self.layers:
+        for layer in self.get_layers():
             hidden_states = layer(
                     hidden_states,
                     attention_mask=causal_mask,
@@ -847,8 +856,8 @@ class AssociativeMemoryCell(torch.nn.Module):
                 )[0]
 
         if not update_mem:
-            for i in range(len(self.layers)):
-                self.layers[i].forward = tmp[i]
+            for i, layer in enumerate(self.get_layers()):
+                layer.forward = tmp[i]
         return hidden_states
         
     
@@ -1088,7 +1097,7 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         act_on = self.rmt_config['act_on'] if 'act_on' in self.rmt_config else False
         if act_on:
           if self.memory_cell.act_type != 'model':
-            for layer in self.memory_cell.layers:
+            for layer in self.memory_cell.get_layers():
                 remainders.append(layer.remainders / layer.segments_passed)
                 n_updates.append(layer.n_updates / layer.segments_passed)
             remainders = torch.mean(torch.stack(remainders, dim=0))
