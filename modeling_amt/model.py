@@ -195,31 +195,8 @@ class ARMTForCausalLM(PreTrainedModel):
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, config=None, *args, **kwargs):
-        from transformers.utils.hub import cached_file, HfHubHTTPError
-        import torch
-
-        if config is None:
-            config = ARMTConfig.from_pretrained(pretrained_model_name_or_path, **kwargs)
-
-        model = cls(config)
-
-        state_dict = None
-        try:
-            weights_path = cached_file(pretrained_model_name_or_path, "model.safetensors", **kwargs)
-            from safetensors.torch import load_file
-            state_dict = load_file(weights_path, device="cpu")
-        except (OSError, HfHubHTTPError):
-            try:
-                weights_path = cached_file(pretrained_model_name_or_path, "pytorch_model.bin", **kwargs)
-                state_dict = torch.load(weights_path, map_location="cpu")
-            except (OSError, HfHubHTTPError):
-                print(f"Warning: Could not find weights for {pretrained_model_name_or_path}. "
-                      f"The model is initialized randomly.")
-
-        if state_dict is not None:
-            model.load_state_dict(state_dict, strict=False)
-
-        return model
+        # Delegate to the base class to benefit from full shard/format support
+        return super().from_pretrained(pretrained_model_name_or_path, *args, config=config, **kwargs)
 
     def gradient_checkpointing_enable(self, *args, **kwargs):
         self.armt.gradient_checkpointing_enable(*args, **kwargs) 

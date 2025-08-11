@@ -1046,7 +1046,6 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         full_logits = torch.cat([o.logits for o in cell_outputs], dim=1)
         
         labels = kwargs.get('labels')
-        labels = labels[:, -full_logits.size(1):]
         if labels is not None:
             labels = labels[:, -full_logits.size(1):]
             shift_labels = labels[..., 1:].contiguous()
@@ -1055,7 +1054,6 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
             flat_logits = shift_logits.view(-1, shift_logits.size(-1))
             
             labels_mask = kwargs.get('labels_mask')
-            labels_mask = labels_mask[:, -full_logits.size(1):]
             if labels_mask is not None:
                 labels_mask = labels_mask[:, -full_logits.size(1):]
                 shift_mask = labels_mask[..., :-1].contiguous()
