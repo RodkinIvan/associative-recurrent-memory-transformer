@@ -20,7 +20,8 @@ class ARMTConfig(PretrainedConfig):
     model_type = "armt"
 
     def __init__(self,
-                 base_model_name="HuggingFaceTB/SmolLM2-135M",
+                 base_model_name=None,
+                 base_model_config=None,
                  num_mem_tokens=16,
                  d_mem=512,
 
@@ -39,10 +40,18 @@ class ARMTConfig(PretrainedConfig):
                  act_on=False,
                  max_hop=4,
                  act_type="associative",
+                 act_format="linear",
+                 noisy_halting=False,
+                 constant_depth=False,
                  time_penalty=0.0,
                  **kwargs):
         super().__init__(**kwargs)
+        # Validate mutual exclusivity
+        if (base_model_name is not None) and (base_model_config is not None):
+            raise ValueError("Exactly one of `base_model_name` or `base_model_config` must be provided. Set the other to None.")
         self.base_model_name = base_model_name
+        # Optional alternative to base_model_name: a config (dict/PretrainedConfig/name-or-path)
+        self.base_model_config = base_model_config
         self.num_mem_tokens = num_mem_tokens
         self.d_mem = d_mem
 
@@ -61,6 +70,9 @@ class ARMTConfig(PretrainedConfig):
         self.act_on = act_on
         self.max_hop = max_hop
         self.act_type = act_type
+        self.act_format = act_format
+        self.noisy_halting = noisy_halting
+        self.constant_depth = constant_depth
         self.time_penalty = time_penalty
 
     def get(self, attr: str, default=None):
@@ -77,8 +89,36 @@ class ARMTForCausalLM(PreTrainedModel):
         super().__init__(config, **kwargs)
         from transformers import AutoConfig, AutoModelForCausalLM
         
-        # base_config = AutoConfig.from_pretrained(config.base_model_name)
-        base_model = AutoModelForCausalLM.from_pretrained(config.base_model_name)
+        # Build base model either from name (pretrained weights) or from provided config
+        base_model = None
+        if getattr(config, 'base_model_name', None) is not None and getattr(config, 'base_model_config', None) is not None:
+            raise ValueError("Exactly one of `base_model_name` or `base_model_config` must be provided in ARMTConfig.")
+        bm_cfg = getattr(config, 'base_model_config', None)
+        if bm_cfg is not None:
+            # Prefer explicit config when provided
+            if isinstance(bm_cfg, PretrainedConfig) and getattr(bm_cfg, 'model_type', None) != ARMTConfig.model_type:
+                resolved_cfg = bm_cfg
+            elif isinstance(bm_cfg, dict):
+                if 'model_type' not in bm_cfg:
+                    raise ValueError("`base_model_config` dict must include a 'model_type' key (e.g., 'gpt_neox', 'llama').")
+                config_cls_or_instance = AutoConfig.for_model(bm_cfg['model_type'])
+                # If an instance was returned, update it; if a class was returned, construct from dict
+                if isinstance(config_cls_or_instance, PretrainedConfig):
+                    resolved_cfg = config_cls_or_instance
+                    for k, v in bm_cfg.items():
+                        setattr(resolved_cfg, k, v)
+                else:
+                    resolved_cfg = config_cls_or_instance.from_dict(bm_cfg)
+            elif isinstance(bm_cfg, str):
+                # Treat as a name or path to load a config
+                resolved_cfg = AutoConfig.from_pretrained(bm_cfg)
+            else:
+                raise TypeError("`base_model_config` must be a transformers.PretrainedConfig, dict, or str (name/path)")
+            base_model = AutoModelForCausalLM.from_config(resolved_cfg)
+        elif getattr(config, 'base_model_name', None):
+            base_model = AutoModelForCausalLM.from_pretrained(config.base_model_name)
+        else:
+            raise ValueError("ARMTForCausalLM requires either `base_model_config` or `base_model_name` in ARMTConfig.")
 
         self.armt_config = config
         
@@ -97,6 +137,10 @@ class ARMTForCausalLM(PreTrainedModel):
             act_on=config.act_on,
             max_hop=config.max_hop,
             act_type=config.act_type,
+            # Optional extras
+            constant_depth=config.get('constant_depth', False),
+            act_format=config.get('act_format', 'linear'),
+            noisy_halting=config.get('noisy_halting', False),
             attend_to_previous_input=config.attend_to_previous_input,
             use_sink=config.use_sink
         )
