@@ -5,7 +5,6 @@ from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 from transformers.cache_utils import Cache, DynamicCache
 from torch.nn.functional import relu as r
 import torch.nn.functional as F
-import wandb
 from munch import Munch
 import os
 
@@ -199,7 +198,6 @@ class AssociativeLayerWrapper(torch.nn.Module):
             prev_mv = torch.zeros_like(new_mv, device=new_mv.device)
             new_info_coef = 1
         
-        # wandb.log({f"gamma_{self.info['layer']}": new_info_coef.mean(dim=1).item() if isinstance(new_info_coef, torch.Tensor) else 1}, step=self.seg_num)
         mv = new_mv - prev_mv
 
         # new_norm = torch.linalg.norm(new_mv, dim=-1)
