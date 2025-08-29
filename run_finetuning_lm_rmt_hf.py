@@ -131,7 +131,7 @@ parser.add_argument('--layers_attr', type=str, default=None, help='attribute of 
 
 parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
 parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
-
+parser.add_argument('--streaming', action='store_true', default=False, help='use streaming dataset')
 os.environ['HF_Trainer'] = '1'
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -166,7 +166,7 @@ if __name__ == '__main__':
                 validation_dataset = validation_dataset.rename_column(args.valid_tokens, args.train_tokens)
         else:
             # Load dataset with streaming=True to load samples on the fly
-            train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=True, trust_remote_code=True)
+            train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=args.streaming, trust_remote_code=True)
             validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation', trust_remote_code=True)
             test_dataset = datasets.load_dataset(args.valid_task_name, split='test', trust_remote_code=True)
             logger.info("Dataset loaded")
@@ -440,7 +440,10 @@ if __name__ == '__main__':
             tokens_per_chunk = 50_000_000  # adjust this estimate as needed
             # Use a buffer at least as large as the number of windows for effective shuffling
             BUFFER = 2048
-            train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+            if args.streaming:
+                train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+            else:
+                train_dataset = train_dataset.shuffle(seed=args.seed)
             # Wrap the raw stream in windowed iterable and shuffle windows
             # length = 5_451_448
             # train_dataset = ChunkedWindowStream(train_dataset, segment_size, history_size, tokens_per_chunk, length, args.seed)
