@@ -128,7 +128,9 @@ parser.add_argument('--layers_attr', type=str, default=None, help='attribute of 
 
 parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
 parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
-
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner'], default='outer',
+                    help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
+parser.add_argument('--streaming', action='store_true', default=False, help='use streaming dataset')
 os.environ['HF_Trainer'] = '1'
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -163,7 +165,7 @@ if __name__ == '__main__':
                 validation_dataset = validation_dataset.rename_column(args.valid_tokens, args.train_tokens)
         else:
             # Load dataset with streaming=True to load samples on the fly
-            train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=True, trust_remote_code=True)
+            train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=args.streaming, trust_remote_code=True)
             validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation', trust_remote_code=True)
             test_dataset = datasets.load_dataset(args.valid_task_name, split='test', trust_remote_code=True)
             logger.info("Dataset loaded")
@@ -436,7 +438,10 @@ if __name__ == '__main__':
             tokens_per_chunk = 50_000_000  # adjust this estimate as needed
             # Use a buffer at least as large as the number of windows for effective shuffling
             BUFFER = 2048
-            train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+            if args.streaming:
+                train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+            else:
+                train_dataset = train_dataset.shuffle(seed=args.seed)
             # Wrap the raw stream in windowed iterable and shuffle windows
             # length = 5_451_448
             # train_dataset = ChunkedWindowStream(train_dataset, segment_size, history_size, tokens_per_chunk, length, args.seed)
@@ -505,9 +510,11 @@ if __name__ == '__main__':
     # Use HF-compatible ARMT instead of original RMT classes
     if args.num_mem_tokens is not None:
         from modeling_amt.model import ARMTConfig, ARMTForCausalLM
-        
-        logger.info(f'Creating HF-compatible ARMT model')
-        
+        if args.armt_impl == 'inner':
+            from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
+
+        logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
+
         # Create ARMT config
         armt_config = ARMTConfig(
             base_model_name=args.from_pretrained,
@@ -530,10 +537,13 @@ if __name__ == '__main__':
             act_type="associative",
             time_penalty=0.0
         )
-        
-        # Create ARMT model
-        model = ARMTForCausalLM(config=armt_config)
-        logger.info(f'Created HF-compatible ARMT model')
+
+        # Create ARMT model (outer vs inner loop)
+        if args.armt_impl == 'inner':
+            model = InnerLoopARMTForCausalLM(config=armt_config)
+        else:
+            model = ARMTForCausalLM(config=armt_config)
+        logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
 
         ## load cpt of ARMT
         if args.model_cpt and args.model_cpt != 'None':
