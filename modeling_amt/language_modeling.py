@@ -37,17 +37,19 @@ def attn_mask_to_4d(attn_mask, upper, query_len):
         return None
     seg_len = attn_mask.size(-1)
     if upper:
-        tri = torch.triu(torch.ones(query_len, seg_len))
+        tri = torch.triu(torch.ones(query_len, seg_len, dtype=attn_mask.dtype, device=attn_mask.device))
     else:
-        tri = torch.tril(torch.ones(query_len, seg_len))
+        tri = torch.tril(torch.ones(query_len, seg_len, dtype=attn_mask.dtype, device=attn_mask.device))
 
-    mask = torch.einsum('bj,ij->bij', attn_mask, tri.to(attn_mask.device))
+    mask = torch.einsum('bj,ij->bij', attn_mask, tri)
     mask = mask.unsqueeze(1)
     return mask
 
 def invert_attn_mask(attn_mask, dtype):
         min_dtype = torch.finfo(dtype).min
-        new_mask = (1.0 - attn_mask) * min_dtype
+        # Use the same dtype as attn_mask to avoid dtype conversion
+        one = torch.tensor(1.0, dtype=attn_mask.dtype, device=attn_mask.device)
+        new_mask = (one - attn_mask) * min_dtype
         return new_mask
 
 
