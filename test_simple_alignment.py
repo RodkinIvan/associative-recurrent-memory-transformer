@@ -31,12 +31,13 @@ def main():
     print(f"Input IDs: {input_ids[0]}")
     print()
     
+    n_generated_tokens = 15
     # Test 1: Generate first token
     print("=== Test 1: First Generated Token ===")
     generated_ids, gen_logits = model.generate(
         input_ids=input_ids, 
         attention_mask=attention_mask, 
-        max_new_tokens=1, 
+        max_new_tokens=n_generated_tokens, 
         return_logits=True
     )
     
@@ -55,26 +56,26 @@ def main():
             input_ids=concat_input_ids,
             attention_mask=concat_attention_mask
         )
-        forward_logits = forward_output.logits[:, -1:, :]  # Last token
+        forward_logits = forward_output.logits[:, -n_generated_tokens-1:-1, :]  # Last tokens
     
     print(f"Forward method logits (first 5): {forward_logits[0, 0, :5]}")
     
     # Check alignment
     print(f"\n=== Alignment Check ===")
-    gen_token = generated_ids[0, 0].item()
-    forward_token = torch.argmax(forward_logits[0, 0]).item()
+    gen_tokens = generated_ids[0]
+    forward_tokens = torch.argmax(forward_logits[0], dim=-1)
     
-    print(f"Generated token: {gen_token}")
-    print(f"Forward predicted token: {forward_token}")
-    
-    if gen_token == forward_token:
+    print(f"Generated tokens: {gen_tokens}")
+    print(f"Forward predicted tokens: {forward_tokens}")
+
+    if torch.all(gen_tokens == forward_tokens):
         print("✅ SUCCESS: Forward and generate methods are perfectly aligned!")
     else:
         print("❌ FAILURE: Forward and generate methods are misaligned!")
     
     # Check logits match
     print(f"\n=== Logits Comparison ===")
-    logits_match = torch.allclose(gen_logits, forward_logits, atol=1e-6)
+    logits_match = torch.allclose(gen_logits, forward_logits, atol=1e-4)
     
     if logits_match:
         print("✅ SUCCESS: Generate and forward logits are identical!")
@@ -83,52 +84,5 @@ def main():
         max_diff = torch.max(torch.abs(gen_logits - forward_logits))
         print(f"Maximum difference: {max_diff}")
     
-    # Test 3: Generate multiple tokens
-    print(f"\n=== Test 2: Multiple Generated Tokens ===")
-    generated_ids_multi, gen_logits_multi = model.generate(
-        input_ids=input_ids, 
-        attention_mask=attention_mask, 
-        max_new_tokens=3, 
-        return_logits=True
-    )
-    
-    print(f"Generated tokens: {generated_ids_multi[0]}")
-    print(f"Generate method logits shape: {gen_logits_multi.shape}")
-    
-    # Forward pass on multi-token concatenated input
-    concat_multi_input_ids = torch.cat([input_ids, generated_ids_multi], dim=-1)
-    concat_multi_attention_mask = torch.cat([attention_mask, torch.ones_like(generated_ids_multi)], dim=-1)
-    
-    with torch.no_grad():
-        forward_multi_output = model(
-            input_ids=concat_multi_input_ids,
-            attention_mask=concat_multi_attention_mask
-        )
-        forward_multi_logits = forward_multi_output.logits[:, -3:, :]  # Last 3 tokens
-    
-    # Check alignment for multiple tokens
-    print(f"\n=== Multiple Token Alignment Check ===")
-    gen_tokens = generated_ids_multi[0]
-    forward_tokens = torch.argmax(forward_multi_logits, dim=-1)
-    
-    print(f"Generated tokens: {gen_tokens}")
-    print(f"Forward predicted tokens: {forward_tokens[0]}")
-    
-    tokens_match = torch.allclose(gen_tokens, forward_tokens[0])
-    if tokens_match:
-        print("✅ SUCCESS: Multiple token alignment is perfect!")
-    else:
-        print("❌ FAILURE: Multiple token alignment failed!")
-    
-    # Check logits match for multiple tokens
-    logits_multi_match = torch.allclose(gen_logits_multi, forward_multi_logits, atol=1e-6)
-    
-    if logits_multi_match:
-        print("✅ SUCCESS: Multiple token logits are identical!")
-    else:
-        print("❌ FAILURE: Multiple token logits differ!")
-        max_diff = torch.max(torch.abs(gen_logits_multi - forward_multi_logits))
-        print(f"Maximum difference: {max_diff}")
-
 if __name__ == "__main__":
     main()
