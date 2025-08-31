@@ -459,7 +459,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                 seg_kwargs["position_ids"] = seg_pos_ids
             seg_kwargs["use_cache"] = use_cache
             if past_key_values is not None:
-                seg_kwargs["past_key_values"] = past_key_values
+                seg_kwargs["past_key_values"] = self.update_past_key_values_sw(past_key_values, self.segment_size)
             if self._rotary_fn is not None and seg_pos_ids is not None:
                 cos, sin = self._rotary_fn(seg_aug, seg_pos_ids)
                 seg_kwargs["position_embeddings"] = (cos, sin)
@@ -731,7 +731,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             
             generated_ids = None
             all_logits = []
-            
+
             # Process tokens one by one to ensure perfect alignment
             for i in range(max_new_tokens):
                 # Prepare the full sequence for this step
