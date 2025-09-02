@@ -5,8 +5,32 @@ from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 from transformers.cache_utils import Cache, DynamicCache
 from torch.nn.functional import relu as r
 import torch.nn.functional as F
-from munch import Munch
 import os
+from dataclasses import dataclass
+from transformers.modeling_outputs import ModelOutput
+
+@dataclass
+class ARMTOutput(ModelOutput):
+    """
+    Custom output format for ARMT with all necessary fields.
+    This replaces Munch in the original implementation.
+    """
+    logits: torch.FloatTensor = None
+    loss: torch.FloatTensor = None
+    hidden_states: torch.FloatTensor = None
+    attentions: tuple = None
+    past_key_values: tuple = None
+    remainders: torch.FloatTensor = None
+    n_updates: torch.FloatTensor = None
+    ce_loss: torch.FloatTensor = None
+
+# Import optimized cross-entropy loss
+try:
+    from cut_cross_entropy import linear_cross_entropy
+    CUT_CROSS_ENTROPY_AVAILABLE = True
+except ImportError:
+    CUT_CROSS_ENTROPY_AVAILABLE = False
+    print("Warning: cut_cross_entropy not available, falling back to standard CrossEntropyLoss")
 
 from modeling_amt.act_utils import ACT_basic, gen_timing_signal, ACTForWholeARMT, ACT_transformer, ACT_constant_depth, ACTForWholeARMT_constant_depth
 try:
@@ -631,7 +655,7 @@ class AssociativeMemoryCell(torch.nn.Module):
             out = self.model(**input1)
             self.generate_mode(False)
             state_tmp = tuple([torch.clone(state) for state in out['state']])
-            out = Munch({k: torch.clone(t) if isinstance(t, torch.Tensor) else t for k, t in out.items()})
+            out = ARMTOutput(**{k: torch.clone(t) if isinstance(t, torch.Tensor) else t for k, t in out.items()})
             input2['state'] = out['state']
             _ = self.model(**input2)
             out['state'] = state_tmp
@@ -734,18 +758,56 @@ class AssociativeMemoryCell(torch.nn.Module):
             out = model_outputs
 
         if labels is not None:
-            logits = out['logits'][..., :-1, :].contiguous()
-            flat_logits = logits.view(-1, logits.size(-1))
             labels = labels[..., 1:].contiguous()
             flat_labels = labels.view(-1)
+            
             if labels_mask is not None:
                 flat_mask = labels_mask[..., :-1].contiguous().view(-1)
-                flat_logits = flat_logits[flat_mask]
                 flat_labels = flat_labels[flat_mask]
             
-            # Average by number of valid tokens
-            ce_loss_fn = CrossEntropyLoss(reduction='sum')
-            ce_loss = ce_loss_fn(flat_logits, flat_labels)
+            # Use optimized linear cross-entropy if available
+            if CUT_CROSS_ENTROPY_AVAILABLE and hasattr(self.model, 'embed_out'):
+                # Get hidden states from the last layer (before LM head)
+                if 'hidden_states' in model_outputs and model_outputs.hidden_states is not None:
+                    # Use the last hidden state
+                    hidden_states = model_outputs.hidden_states[-1]
+                    # Remove memory tokens from hidden states
+                    if self.num_mem_tokens not in {0, None}:
+                        hidden_states = hidden_states[:, int(self.use_sink):-self.num_mem_tokens]
+                    # Shift for next token prediction
+                    hidden_states = hidden_states[..., :-1, :].contiguous()
+                    flat_hidden_states = hidden_states.view(-1, hidden_states.size(-1))
+                    
+                    if labels_mask is not None:
+                        flat_hidden_states = flat_hidden_states[flat_mask]
+                    
+                    # Get LM head weights
+                    lm_head_weights = self.model.embed_out.weight  # Shape: (vocab_size, hidden_size)
+                    
+                    # Use linear_cross_entropy with hidden states and LM head weights
+                    ce_loss = linear_cross_entropy(
+                        flat_hidden_states,  # embeddings
+                        lm_head_weights,    # classifier weights
+                        flat_labels,        # targets
+                        reduction='sum'
+                    )
+                else:
+                    # Fallback to standard approach if hidden states not available
+                    logits = out['logits'][..., :-1, :].contiguous()
+                    flat_logits = logits.view(-1, logits.size(-1))
+                    if labels_mask is not None:
+                        flat_logits = flat_logits[flat_mask]
+                    ce_loss_fn = CrossEntropyLoss(reduction='sum')
+                    ce_loss = ce_loss_fn(flat_logits, flat_labels)
+            else:
+                # Fallback to standard CrossEntropyLoss
+                logits = out['logits'][..., :-1, :].contiguous()
+                flat_logits = logits.view(-1, logits.size(-1))
+                if labels_mask is not None:
+                    flat_logits = flat_logits[flat_mask]
+                ce_loss_fn = CrossEntropyLoss(reduction='sum')
+                ce_loss = ce_loss_fn(flat_logits, flat_labels)
+            
             if labels_mask is not None:
                 denom = labels_mask[..., :-1].contiguous().view(-1).sum()
             else:
@@ -890,7 +952,7 @@ class AssociativeMemoryCell(torch.nn.Module):
             hidden_states = self.model.gpt_neox.final_layer_norm(out)
 
             lm_logits = self.model.embed_out(hidden_states)
-            return Munch(logits=lm_logits, n_updates=n_updates, remainders=remainders)
+            return ARMTOutput(logits=lm_logits, n_updates=n_updates, remainders=remainders)
 
 class AssociativeRecurrentWrapper(torch.nn.Module):
     def __init__(self, memory_cell, **rmt_kwargs):
@@ -1042,28 +1104,61 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         return segments
 
     def process_outputs(self, cell_outputs, **kwargs):
-        out = CausalLMOutputWithCrossAttentions()
+        out = ARMTOutput()
         full_logits = torch.cat([o.logits for o in cell_outputs], dim=1)
         
         labels = kwargs.get('labels')
         if labels is not None:
             labels = labels[:, -full_logits.size(1):]
             shift_labels = labels[..., 1:].contiguous()
-            shift_logits = full_logits[..., :-1, :].contiguous()
             flat_labels = shift_labels.view(-1)
-            flat_logits = shift_logits.view(-1, shift_logits.size(-1))
             
             labels_mask = kwargs.get('labels_mask')
             if labels_mask is not None:
                 labels_mask = labels_mask[:, -full_logits.size(1):]
                 shift_mask = labels_mask[..., :-1].contiguous()
-
                 flat_labels = flat_labels[shift_mask.view(-1)]
-                flat_logits = flat_logits[shift_mask.view(-1)]
             
-            # Average by number of valid tokens
-            loss_fct = CrossEntropyLoss(reduction='sum')
-            loss = loss_fct(flat_logits, flat_labels)
+            # Use optimized linear cross-entropy if available
+            if CUT_CROSS_ENTROPY_AVAILABLE and hasattr(self.memory_cell.model, 'embed_out'):
+                # Get hidden states from the last segment
+                if cell_outputs and 'hidden_states' in cell_outputs[-1] and cell_outputs[-1].hidden_states is not None:
+                    # Concatenate hidden states from all segments
+                    full_hidden_states = torch.cat([o.hidden_states[-1] for o in cell_outputs], dim=1)
+                    # Shift for next token prediction
+                    shift_hidden_states = full_hidden_states[..., :-1, :].contiguous()
+                    flat_hidden_states = shift_hidden_states.view(-1, shift_hidden_states.size(-1))
+                    
+                    if labels_mask is not None:
+                        flat_hidden_states = flat_hidden_states[shift_mask.view(-1)]
+                    
+                    # Get LM head weights
+                    lm_head_weights = self.memory_cell.model.embed_out.weight  # Shape: (vocab_size, hidden_size)
+                    
+                    # Use linear_cross_entropy with hidden states and LM head weights
+                    loss = linear_cross_entropy(
+                        flat_hidden_states,  # embeddings
+                        lm_head_weights,    # classifier weights
+                        flat_labels,        # targets
+                        reduction='sum'
+                    )
+                else:
+                    # Fallback to standard approach if hidden states not available
+                    shift_logits = full_logits[..., :-1, :].contiguous()
+                    flat_logits = shift_logits.view(-1, shift_logits.size(-1))
+                    if labels_mask is not None:
+                        flat_logits = flat_logits[shift_mask.view(-1)]
+                    loss_fct = CrossEntropyLoss(reduction='sum')
+                    loss = loss_fct(flat_logits, flat_labels)
+            else:
+                # Fallback to standard CrossEntropyLoss
+                shift_logits = full_logits[..., :-1, :].contiguous()
+                flat_logits = shift_logits.view(-1, shift_logits.size(-1))
+                if labels_mask is not None:
+                    flat_logits = flat_logits[shift_mask.view(-1)]
+                loss_fct = CrossEntropyLoss(reduction='sum')
+                loss = loss_fct(flat_logits, flat_labels)
+            
             if labels_mask is not None:
                 # Use the same mask used to filter flat logits/labels
                 denom = labels_mask[..., :-1].contiguous().view(-1).sum()
@@ -1081,9 +1176,11 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         if kwargs.get('output_attentions'):
             segment_keys.append('attentions')
         if kwargs.get('output_hidden_states'):
-            full_hidden_states = tuple([torch.cat(layer_hs, dim=1) for layer_hs in zip(*[o.hidden_states for o in cell_outputs])])
-            segment_keys.append('hidden_states')
-            out['hidden_states'] = full_hidden_states
+            # Only process hidden_states if all cell outputs have them
+            if all(hasattr(o, 'hidden_states') and o.hidden_states is not None for o in cell_outputs):
+                full_hidden_states = tuple([torch.cat(layer_hs, dim=1) for layer_hs in zip(*[o.hidden_states for o in cell_outputs])])
+                segment_keys.append('hidden_states')
+                out['hidden_states'] = full_hidden_states
         if ('HF_Trainer' not in os.environ) or not os.environ['HF_Trainer']:
             for seg_num, o in enumerate(cell_outputs):
                 for key, value in o.items():
