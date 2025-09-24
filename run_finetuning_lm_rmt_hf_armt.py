@@ -210,7 +210,7 @@ if __name__ == '__main__':
                 'test': test_dataset.with_format("torch")
             })
             validation_dataset = dataset
-            # validation_dataset = datasets.load_from_disk('/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized')
+            # validation_dataset = datasets.load_from_disk('/mnt/data/users/XXXX/lab/datasets/pg19_tokenized')
 
 
     segment_size = args.segment_size

@@ -13,7 +13,7 @@ MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
 RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:GPTNeoXForCausalLM
 
-DATASET_PATH=irodkin/groupmul_A5_split
+DATASET_PATH=XXXX/groupmul_A5_split
 
 ITERS=40000
 TBS=512

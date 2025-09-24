@@ -84,6 +84,6 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --train_tokens tokens \
         --armt_impl inner \
         --attn_implementation eager 
-        # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
+        # --tokenized_dataset /mnt/data/users/XXXX/lab/datasets/pg19_tokenized
 done
 echo "done" 

@@ -82,7 +82,7 @@ parser.add_argument('--model_type', type=str, default='encoder-decoder',
                          '(default: encoder-decoder)')
 
 
-# Aydar # RMT args
+# XXXX # RMT args
 parser.add_argument('--segment_size', type=int, default=None, help='number of real tokens in block')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
@@ -212,7 +212,7 @@ if __name__ == '__main__':
                 'test': test_dataset.with_format("torch")
             })
             validation_dataset = dataset
-            # validation_dataset = datasets.load_from_disk('/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized')
+            # validation_dataset = datasets.load_from_disk('/mnt/data/users/XXXX/lab/datasets/pg19_tokenized')
 
 
     segment_size = args.segment_size

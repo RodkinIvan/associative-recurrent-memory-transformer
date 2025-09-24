@@ -12,7 +12,7 @@ MODEL_TYPE=decoder
 # Use the unified ARMT wrapper model which now accepts base_model_config
 BACKBONE_CLS=modeling_amt.model:ARMTForCausalLM
 
-DATASET_PATH=irodkin/1dCA_r2s20T20
+DATASET_PATH=XXXX/1dCA_r2s20T20
 
 ITERS=40000
 TBS=256

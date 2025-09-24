@@ -11,4 +11,4 @@ def tokenize(sample):
     return sample
 
 new_ds = dataset.map(tokenize, batch_size=256)
-new_ds.save_to_disk('/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized')
+new_ds.save_to_disk('/mnt/data/users/XXXX/lab/datasets/pg19_tokenized')

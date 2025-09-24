@@ -22,7 +22,7 @@ MAX_VAL_SEGMENTSS=(16)
 MEMORY_SIZES=(16)
 INPUT_TOKENS=128
 LRS=(1e-4)
-MODEL=irodkin/gpt2-wiki103
+MODEL=XXXX/gpt2-wiki103
 BSS=(4)
 
 D_MEM=96
@@ -60,7 +60,7 @@ do
 for LR in $LR_
 do
 
-MODEL_CPT=../runs/lm_long/amt/wikitext-103-v1/irodkin/gpt2-wiki103/lr1e-4_linear_alpha_dmem96_1024-8x128_mem16_bs32_iters36000_regular_bptt-8/run_4
+MODEL_CPT=../runs/lm_long/amt/wikitext-103-v1/XXXX/gpt2-wiki103/lr1e-4_linear_alpha_dmem96_1024-8x128_mem16_bs32_iters36000_regular_bptt-8/run_4
 
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N

@@ -17,7 +17,7 @@ DATASET_NAME=pg19
 MODEL_NAME=meta-llama/Llama-3.2-1B
 MODEL_PATH=$MODEL_NAME
 
-TOKENIZED_DATASET=/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
+TOKENIZED_DATASET=/mnt/data/users/XXXX/lab/datasets/pg19_tokenized
 
 ITERS=50000
 TBS=64

@@ -99,6 +99,6 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --prev_seg_kv \
         --use_sink \
         --attn_implementation eager 
-        # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
+        # --tokenized_dataset /mnt/data/users/XXXX/lab/datasets/pg19_tokenized
 done
 echo "done"

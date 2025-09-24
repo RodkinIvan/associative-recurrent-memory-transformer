@@ -103,7 +103,7 @@ def create_split_datasets(group_name: str, dataset_dict, length: int = 40):
     for l in ds.keys():
         print(f"Pushing split dataset: {dataset_name}_split with config {l}")
         ds[l].push_to_hub(
-            f"irodkin/{dataset_name}_split",
+            f"XXXX/{dataset_name}_split",
             config_name=f"{l}",
         )
 
