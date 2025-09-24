@@ -40,7 +40,11 @@ args = parser.parse_args()
 
 config = dict(**default_config)
 config['hidden_size'] = int(args.hidden_size)
-config['intermediate_size'] = int(args.intermediate_size)
+if int(args.intermediate_size) > 4*int(args.hidden_size):
+    config['intermediate_size'] = int(args.intermediate_size)
+else:
+    print("WARNING: intermediate size is set to 4*hidden_size")
+    config['intermediate_size'] = 4*int(args.hidden_size)
 config['num_hidden_layers'] = int(args.num_hidden_layers)
 config['num_attention_heads'] = int(args.num_attention_heads)
 

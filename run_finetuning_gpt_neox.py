@@ -69,6 +69,7 @@ parser.add_argument('--rewrite_setting', action='store_true', default=False,
                     help='keys can occur several times')
 parser.add_argument('--act_on', action='store_true', default=False,
                     help='use Adaptive Computation Time')
+
 parser.add_argument('--act_format',  type=str, default='linear', help='ACT format: linear or transformer')
 
 parser.add_argument('--max_hop', type=int, default=4, help='number of cycles in ACT')
@@ -295,6 +296,7 @@ if __name__ == '__main__':
 
 
 
+
     if args.dataset_name == 'ca':
         train_dataloader = DataLoader(
             train_dataset, batch_size=per_worker_batch_size, generator=train_rnd_generator,
@@ -336,6 +338,7 @@ if __name__ == '__main__':
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
+
 
         if 'lstm' in args.model_path:
             model_cfg = model_cfg.to_dict()
@@ -455,6 +458,7 @@ if __name__ == '__main__':
             array_size = args.valid_array_size
         if args.dataset_name in ["reverse_binary", "reverse_decimal", "copy_binary", "copy_decimal"]:
             array_size = data['labels'][0].shape[0] // 2 - 1 if 'armt' not in args.model_path else data['labels'][0].shape[-1] - 1
+
         if args.dataset_name in ["addition_binary", "addition_decimal"]:
             array_size = data['labels'][0].shape[0] // 3 - 1 if 'armt' not in args.model_path else data['labels'][0].shape[-1] - 1
 
@@ -526,4 +530,4 @@ if __name__ == '__main__':
         else:
             raise "No valid dataset"
 
-    print('Done!') 
+    print('Done!')
