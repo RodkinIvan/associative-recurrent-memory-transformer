@@ -105,7 +105,7 @@ class RWKV_v5_tiny(torch.nn.Module):
     @staticmethod
     def from_pretrained(*_args, **kwargs):
         args = dict(
-            load_model='/home/rodkin/lab/rwkv_tiny.pth',
+            load_model='/home/XXXX/lab/rwkv_tiny.pth',
             grad_cp=False
         )
         model = RWKV_v5_tiny(**args)

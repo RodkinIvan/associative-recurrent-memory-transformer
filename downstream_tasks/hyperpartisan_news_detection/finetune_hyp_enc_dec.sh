@@ -14,7 +14,7 @@ TBS=32 # total batch size
 BS=8 # batch size per gpu, * grad_acc_steps
 WD=1e-03
 
-DATA_PATH=/home/kuratov/data/hyperpartisan_news_detection
+DATA_PATH=/home/XXXX/data/hyperpartisan_news_detection
 
 for (( i=0; i<${#MODEL_NAMES[@]}; i++ ))
 do

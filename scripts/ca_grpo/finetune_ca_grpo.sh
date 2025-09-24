@@ -15,7 +15,7 @@ MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
 RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:GPTNeoXForCausalLM
 
-DATASET_PATH=irodkin/1dCA_r2s20T20
+DATASET_PATH=XXXX/1dCA_r2s20T20
 ITERS=40000
 TBS=256
 

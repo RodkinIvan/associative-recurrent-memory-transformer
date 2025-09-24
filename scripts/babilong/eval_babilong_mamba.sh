@@ -50,7 +50,7 @@ SAMPLE_SIZE=$(($SEGMENT_SIZE*$MAX_N_SEGMENTS)) # length of task sample in tokens
 ACCEL_CONFIG=./accel_configs/accelerate.yaml
 
 
-MODEL_CPT=/home/jovyan/armt/runs/babilong/qa1_single-supporting-fact/mamba/state-spaces/mamba-130m-hf/lr3e-4_linear_adamw_wd1e-03_32x512_mem_bs128_bptt--1/run_2 
+MODEL_CPT=/home/XXXX/armt/runs/babilong/qa1_single-supporting-fact/mamba/state-spaces/mamba-130m-hf/lr3e-4_linear_adamw_wd1e-03_32x512_mem_bs128_bptt--1/run_2 
 
 
 echo RUNNING: TASK_DATASET $TASK_DATASET MEMORY_SIZE $MEMORY_SIZE SEGMENT_SIZE $SEGMENT_SIZE 
@@ -60,8 +60,8 @@ echo gradient accumulation steps $GRAD_ACC_STEPS
 accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29711 run_finetuning_babilong_rmt.py \
         --task_dataset $TASK_DATASET \
         --noise_dataset $NOISE_DATASET \
-        --babi_path /home/jovyan/rmt/babilong/data/tasks_1-20_v1-2/en-10k \
-        --model_path  /home/jovyan/armt/runs/babilong/${TASK_DATASET}/mamba/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
+        --babi_path /home/XXXX/rmt/babilong/data/tasks_1-20_v1-2/en-10k \
+        --model_path  /home/XXXX/armt/runs/babilong/${TASK_DATASET}/mamba/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --memory_cell_cls $MEMORY_CELL \

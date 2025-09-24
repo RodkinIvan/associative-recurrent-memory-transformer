@@ -107,7 +107,7 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29571 run_fine
         --early_stopping_patience 30 \
         --seed $(($N+42)) \
         --clip_grad_value 1.0 \
-        --dataset_path /home/jovyan/armt/datasets/associative_retrieval \
+        --dataset_path /home/XXXX/armt/datasets/associative_retrieval \
         --train_size 1000000 \
         --valid_size 1000 \
         --test_size 10000 \

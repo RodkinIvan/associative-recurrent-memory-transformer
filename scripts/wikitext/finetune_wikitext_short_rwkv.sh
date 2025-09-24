@@ -100,7 +100,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --clip_grad_value 1.0 \
         --save_best \
         --tokenizer $TOKENIZER
-        # --tokenized_dataset irodkin/wikitext-103-raw-v1-rwkv-v5-tokenized
+        # --tokenized_dataset XXXX/wikitext-103-raw-v1-rwkv-v5-tokenized
 done
 done
 done

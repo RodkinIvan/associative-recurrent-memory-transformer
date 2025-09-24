@@ -86,7 +86,7 @@ parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to
 
 parser.add_argument('--output_last_segment_only', action='store_true', default=False,
                     help='')
-# Aydar # RMT args 
+# XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
@@ -138,7 +138,7 @@ if __name__ == '__main__':
         logger.warning('model_path is not set: config, logs and checkpoints will not be saved.')
 
     dataset_name_to_path = {
-        "ca": "irodkin/1dCA_r2s20T20",
+        "ca": "XXXX/1dCA_r2s20T20",
         # put your dataset_name -> dataset_path mappings here
     }
     dataset_path = dataset_name_to_path[args.dataset_name]

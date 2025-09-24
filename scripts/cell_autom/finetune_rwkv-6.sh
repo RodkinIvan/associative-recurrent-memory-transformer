@@ -17,7 +17,7 @@ MEMORY_CELL=baselines.dummy.language_modeling:MemoryCell
 RECURRENT_WRAPPER=baselines.dummy.language_modeling:RecurrentWrapper
 BACKBONE_CLS=baselines.rwkv.language_modeling:RWKV_v6
 
-DATASET_PATH=irodkin/1dCA_r2s20T20
+DATASET_PATH=XXXX/1dCA_r2s20T20
 
 ITERS=40000
 TBS=256

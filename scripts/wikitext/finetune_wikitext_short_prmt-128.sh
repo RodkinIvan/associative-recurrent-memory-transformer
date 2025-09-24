@@ -24,7 +24,7 @@ MAX_VAL_SEGMENTSS=(15 15 15 15 15)
 MEMORY_SIZES=(4 4 4 4)
 INPUT_TOKENS=128
 LRS=(1e-4 1e-4 1e-4 1e-4)
-MODEL=irodkin/gpt2-wiki2
+MODEL=XXXX/gpt2-wiki2
 
 
 BSS=(2 2 1 1)
@@ -100,7 +100,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --seed $(($N+42*$j)) \
         --clip_grad_value 5.0 \
         --alpha_distil $ALPHA \
-        --pretrained_teacher 'irodkin/gpt2-wiki2' \
+        --pretrained_teacher 'XXXX/gpt2-wiki2' \
         --teacher_cls $TEACHER_CLS \
         --save_best \
         --tokenizer 'gpt2' 

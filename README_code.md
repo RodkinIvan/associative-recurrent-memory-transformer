@@ -88,7 +88,7 @@ Triton 1.1.1 brings x2 speed-up to sparse operations on A100, but DeepSpeed (0.6
 DeepSpeed fork with triton 1.1.1 support could be used in the cases where such speed-up is needed:
 ```bash
 pip install triton==1.1.1
-git clone https://github.com/yurakuratov/DeepSpeed.git
+git clone https://github.com/XXXXXXXX/DeepSpeed.git
 cd DeepSpeed
 DS_BUILD_SPARSE_ATTN=1 pip install -e . --global-option="build_ext" --global-option="-j8" --no-cache
 ```

@@ -100,7 +100,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --seed $(($N+42*$j)) \
         --clip_grad_value 5.0 \
         --alpha_distil $ALPHA \
-        --pretrained_teacher 'irodkin/gpt2-wiki103' \
+        --pretrained_teacher 'XXXX/gpt2-wiki103' \
         --teacher_cls $TEACHER_CLS \
         --save_best \
         --tokenizer 'gpt2'

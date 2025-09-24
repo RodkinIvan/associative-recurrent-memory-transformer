@@ -58,7 +58,7 @@ ACCEL_CONFIG=./accel_configs/accelerate.yaml
 
 if [[ j -gt 0 ]]
 then
-    MODEL_CPT=/home/jovyan/armt/runs/babilong/${TASK_DATASET}/mamba/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTSS[j-1]}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N 
+    MODEL_CPT=/home/XXXX/armt/runs/babilong/${TASK_DATASET}/mamba/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTSS[j-1]}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N 
 else
     MODEL_CPT=None
 fi
@@ -70,8 +70,8 @@ echo gradient accumulation steps $GRAD_ACC_STEPS
 accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29712 run_finetuning_babilong_rmt.py \
         --task_dataset $TASK_DATASET \
         --noise_dataset $NOISE_DATASET \
-        --babi_path /home/jovyan/rmt/babilong/data/tasks_1-20_v1-2/en-10k \
-        --model_path  /home/jovyan/armt/runs/babilong/${TASK_DATASET}/mamba/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
+        --babi_path /home/XXXX/rmt/babilong/data/tasks_1-20_v1-2/en-10k \
+        --model_path  /home/XXXX/armt/runs/babilong/${TASK_DATASET}/mamba/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --memory_cell_cls $MEMORY_CELL \

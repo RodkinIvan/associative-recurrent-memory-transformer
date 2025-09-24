@@ -106,7 +106,7 @@ parser.add_argument('--input_rule', action='store_true', default=False,
 parser.add_argument('--rule_last', action='store_true', default=False,
                     help='O-SR training')
 
-parser.add_argument('--dataset_path', type=str, default="irodkin/1dCA_r2s20T20", help="path to saved datasets")
+parser.add_argument('--dataset_path', type=str, default="XXXX/1dCA_r2s20T20", help="path to saved datasets")
 parser.add_argument('--segment_size', type=int, default=128, help='number of useful tokens in a segment')
 parser.add_argument('--d_mem', type=int, default=None, help='number of rows in associative matrix')
 parser.add_argument('--layers_attr', type=str, default=None, help='attribute of model, which contains layers')
@@ -131,7 +131,7 @@ parser.add_argument('--freeze_mem', action='store_true', default=False,
 parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
-# Aydar # RMT args 
+# XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
@@ -602,7 +602,7 @@ if __name__ == '__main__':
     model, optimizer, train_dataloader, valid_dataloader, test_dataloader = accelerator.prepare(
         model, optimizer, train_dataloader, valid_dataloader, None)
 
-    ### booydar
+    ### XXXX
 
     fwd_kwargs = dict()
     if args.output_last_segment_only:
@@ -615,7 +615,7 @@ if __name__ == '__main__':
         fwd_kwargs['output_only_last_segment'] = True
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
-                      ###booydar
+                      ###XXXX
                       batch_metrics_fn=batch_metrics_fn,
                       stop_metric_condition=lambda m: m >= args.desired_metric,
                       forward_kwargs=fwd_kwargs,

@@ -28,7 +28,7 @@ BSS=(2 2 1 1 1)
 for N in 1
 do
 
-for MODEL_NAME in irodkin/gpt2-wiki2
+for MODEL_NAME in XXXX/gpt2-wiki2
 do
 
 for (( j=0; j<${#MEMORY_SIZES[@]}; j++ ))

@@ -207,8 +207,8 @@ if __name__ == '__main__':
         noise_dataset_train = noise_dataset['train']
         noise_dataset_test = noise_dataset['test']
     except ConnectionError:
-        noise_dataset_train = datasets.Dataset.from_file('/home/jovyan/.cache/huggingface/datasets/pg19/default/0.1.0/64837d6fce7251337df051ca74e9a5435d1c9cb7f3033ba257826e44d338f83c/pg19-train.arrow')
-        noise_dataset_test = datasets.Dataset.from_file('/home/jovyan/.cache/huggingface/datasets/pg19/default/0.1.0/64837d6fce7251337df051ca74e9a5435d1c9cb7f3033ba257826e44d338f83c/pg19-test.arrow')
+        noise_dataset_train = datasets.Dataset.from_file('/home/XXXX/.cache/huggingface/datasets/pg19/default/0.1.0/64837d6fce7251337df051ca74e9a5435d1c9cb7f3033ba257826e44d338f83c/pg19-train.arrow')
+        noise_dataset_test = datasets.Dataset.from_file('/home/XXXX/.cache/huggingface/datasets/pg19/default/0.1.0/64837d6fce7251337df051ca74e9a5435d1c9cb7f3033ba257826e44d338f83c/pg19-test.arrow')
     
     # task dataset 
     train_path = os.path.join(args.babi_path, f"{args.task_dataset}_train.txt")
@@ -547,14 +547,14 @@ if __name__ == '__main__':
 
         return metrics
 
-    ### booydar
+    ### XXXX
     batch_metrics_fn = lambda b, y: dict(
         **{key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))},
         **extra_batch_metrics_fn(b, y)
     )
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, test_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
-                      ###booydar
+                      ###XXXX
                       batch_metrics_fn=batch_metrics_fn,
                       generate_kwargs={"pad_token_id": id_pad_value, "max_new_tokens":10},
                       stop_metric_condition=lambda m: m >= args.desired_metric,

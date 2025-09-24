@@ -10,7 +10,7 @@ We evaluate the models on the following datasets:
 
 | Dataset | Description | Train size | Val. size | Test size |
 | --- | --- | --- | --- | --- |
-| [1D Cellular Automata](https://huggingface.co/datasets/irodkin/1dCA_r2s20T20) | Predicts the next state of a 1D cellular automaton based on its current state | 950,000 | 50,000 | 100,000 |
+| [1D Cellular Automata](https://huggingface.co/datasets/XXXX/1dCA_r2s20T20) | Predicts the next state of a 1D cellular automaton based on its current state | 950,000 | 50,000 | 100,000 |
 | 
 
 >[paper](https://arxiv.org/abs/2207.06881) Recurrent Memory Transformer
@@ -36,7 +36,7 @@ We evaluated the following models on our dataset:
 Clone the repository to your local machine.
 
 ```bash
-git clone https://github.com/RodkinIvan/associative-recurrent-memory-transformer.git
+git clone https://github.com/XXXXXXXX/associative-recurrent-memory-transformer.git
 cd associative-recurrent-memory-transformer
 ```
 

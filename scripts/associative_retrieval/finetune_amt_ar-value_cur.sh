@@ -60,7 +60,7 @@ BLOCK_SIZE=$((KEY_SIZE + VALUE_SIZE + 2))
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
 cd ../..
-MODEL_CFG=/home/rodkin/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
+MODEL_CFG=/home/XXXX/rmt/wip/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
 for LR in 3e-04
 do
@@ -117,7 +117,7 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29571 run_fine
         --early_stopping_patience 30 \
         --seed $(($N+42)) \
         --clip_grad_value 1.0 \
-        --dataset_path /home/rodkin/rmt/datasets/associative_retrieval \
+        --dataset_path /home/XXXX/rmt/datasets/associative_retrieval \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
         --train_size 1000000 \

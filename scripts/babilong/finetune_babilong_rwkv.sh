@@ -71,7 +71,8 @@ ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${
 
 if [[ j -gt 0 ]]
 then
-    MODEL_CPT=/mnt/data/users/ivan.rodkin/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTSS[j-1]}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N 
+
+MODEL_CPT=/mnt/data/users/XXXX.XXXX/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTSS[j-1]}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N 
 
 else
     MODEL_CPT=None
@@ -84,8 +85,8 @@ echo gradient accumulation steps $GRAD_ACC_STEPS
 accelerate launch --config_file $ACCEL_CONFIG --main_process_port 29701 --mixed_precision bf16 --num_processes $NP run_finetuning_babilong_rmt.py \
         --task_dataset $TASK_DATASET \
         --noise_dataset $NOISE_DATASET \
-        --babi_path /mnt/data/users/ivan.rodkin/lab/associative-recurrent-memory-transformer/data/tasks_1-20_v1-2/en-10k \
-        --model_path /mnt/data/users/ivan.rodkin/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
+        --babi_path /mnt/data/users/XXXX.XXXX/lab/associative-recurrent-memory-transformer/data/tasks_1-20_v1-2/en-10k \
+        --model_path /mnt/data/users/XXXX.XXXX/runs/babilong/${TASK_DATASET}/rwkv/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_bptt-${K2}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --memory_cell_cls $MEMORY_CELL \

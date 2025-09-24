@@ -94,7 +94,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --seed $(($N+42*$j)) \
         --clip_grad_value 5.0 \
         --save_best
-        # --rwkv_tokenizer /home/rodkin/lab/t5-experiments/baselines/rwkv/RWKV_v5/src/dataflow/rwkv_vocab_v20230424.txt
+        # --rwkv_tokenizer /home/XXXX/lab/t5-experiments/baselines/rwkv/RWKV_v5/src/dataflow/rwkv_vocab_v20230424.txt
         
 done
 done

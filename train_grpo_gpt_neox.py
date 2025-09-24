@@ -55,9 +55,9 @@ GEN_TOKEN = "<gen>"
 EOS_TOKEN = "<eos>"
 
 # Load datasets
-train_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="train")
-val_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="validation")
-test_dataset = load_dataset("irodkin/1dCA_r2s20T20", split="test")
+train_dataset = load_dataset("XXXX/1dCA_r2s20T20", split="train")
+val_dataset = load_dataset("XXXX/1dCA_r2s20T20", split="validation")
+test_dataset = load_dataset("XXXX/1dCA_r2s20T20", split="test")
 
 # Process: Insert <sep> between input states, <gen> before target
 def process_sample(sample):

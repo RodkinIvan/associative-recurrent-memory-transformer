@@ -75,7 +75,7 @@ parser.add_argument('--model_type', type=str, default='encoder-decoder',
                          '(default: encoder-decoder)')
 
 
-# Aydar # RMT args 
+# XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
@@ -241,9 +241,9 @@ if __name__ == '__main__':
         return collated
 
 
-    train_dataset = load_from_disk('/home/jovyan/rmt/datasets/arxiv/train')
-    valid_dataset = load_from_disk('/home/jovyan/rmt/datasets/arxiv/valid')
-    test_dataset = load_from_disk('/home/jovyan/rmt/datasets/arxiv/test')
+    train_dataset = load_from_disk('/home/XXXX/rmt/datasets/arxiv/train')
+    valid_dataset = load_from_disk('/home/XXXX/rmt/datasets/arxiv/valid')
+    test_dataset = load_from_disk('/home/XXXX/rmt/datasets/arxiv/test')
 
     
     # shuffle train data each epoch (one loop over train_dataset)
@@ -438,11 +438,11 @@ if __name__ == '__main__':
 
         return metrics
 
-    ### booydar
+    ### XXXX
     batch_metrics_fn = lambda _, y: {key: y[key] for key in y.keys() if (('loss' in key) or ('!log' in key))}
     trainer = Trainer(args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
                       keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
-                      ###booydar
+                      ###XXXX
                       batch_metrics_fn=batch_metrics_fn,
                       generate_kwargs={})
 
