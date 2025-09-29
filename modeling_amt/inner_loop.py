@@ -414,9 +414,8 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             seg_aug_len = seg_aug.size(1)
             
             # Check if we're using cached forward pass (past_key_values provided)
-            using_cache = kwargs.get('past_key_values') is not None
             
-            if self.sliding_window and not using_cache:
+            if self.sliding_window:
                 # Current segment: build 4D mask at query_len = seg_aug_len
                 base_cur4d = attn_mask_to_4d(attn_mask.to(seg_aug.dtype), upper=False, query_len=seg_aug_len)
                 cur4d = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
@@ -432,15 +431,6 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                     seg_mask = self._build_sliding_window_mask(prev4d, cur4d, prev_aug_len, seg_aug_len)
                 else:
                     seg_mask = cur4d
-            elif using_cache:
-                # When using cache, attention mask should already be properly formatted
-                # Just ensure it has the right shape for the current query length
-                if attention_mask.dim() == 4:
-                    seg_mask = attention_mask
-                else:
-                    # Convert 2D mask to 4D if needed
-                    base_cur4d = attn_mask_to_4d(attention_mask.to(seg_aug.dtype), upper=False, query_len=seg_aug_len)
-                    seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
             else:
                 base_cur4d = attn_mask_to_4d(attn_mask.to(seg_aug.dtype), upper=False, query_len=seg_aug_len)
                 seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
@@ -496,11 +486,20 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             prev_aug_len += seg_aug_len
 
         merged = torch.cat(out_full, dim=1) if len(out_full) > 1 else out_full[0]
-
         # Return tensor or HF-like tuple (hidden_states, attn, present_kv)
         # if use_cache or ("output_attentions" in kwargs and kwargs["output_attentions"]):
         #     return (merged, last_attn, present_kv)
-        return merged
+        if isinstance(layer_out, tuple):
+            if len(layer_out) == 1:
+                return (merged,)
+            elif len(layer_out) == 2:
+                return (merged, last_attn)
+            elif len(layer_out) == 3:
+                return (merged, last_attn, present_kv)
+            else:
+                raise ValueError(f"Expected 1, 2 or 3 elements in layer output, got {len(layer_out)}")
+        else:
+            return merged
 
     def update_past_key_values_sw(self, past_key_values, window_size):
         """
@@ -512,24 +511,26 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             
         # Convert to legacy cache format for easier manipulation
         if hasattr(past_key_values, 'to_legacy_cache'):
-            past_key_values = past_key_values.to_legacy_cache()
+            legacy = past_key_values.to_legacy_cache()
         
         # Keep only the most recent tokens within the window size
-        updated_past_key_values = [
+        legacy = [
             [
-                k_or_v[..., -window_size:, :]
-                for k_or_v in seg_kv
+                k_or_v[..., -window_size:, :] if k_or_v is not None else None
+                for k_or_v in seg_kv 
             ]
-            for seg_kv in past_key_values
+            for seg_kv in legacy
         ]
         
         # Convert back to DynamicCache if possible
         try:
             from transformers.cache_utils import DynamicCache
-            return DynamicCache.from_legacy_cache(updated_past_key_values)
-        except ImportError:
-            return updated_past_key_values
-
+            return DynamicCache.from_legacy_cache(legacy)
+        except Exception:
+            for layer_idx in range(len(legacy)):
+                past_key_values.layers[layer_idx].keys = legacy[layer_idx][0]
+                past_key_values.layers[layer_idx].values = legacy[layer_idx][1]
+            return past_key_values
 
 class InnerLoopARMTForCausalLM(PreTrainedModel):
     """
