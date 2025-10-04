@@ -6,10 +6,24 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from transformers import PreTrainedModel, PretrainedConfig
+from transformers.cache_utils import DynamicCache
 
 # Reuse utilities from the existing implementation to ensure identical math
 from modeling_amt.language_modeling import DPFP, invert_attn_mask, attn_mask_to_4d
 
+def reverse_invert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
+    mask = mask.clone().long()
+    mask[mask > -1] = 1
+    mask[mask < -1] = 0
+    return mask
+
+def segment_tensor(t: torch.Tensor, start_idx: int, end_idx: int, seq_len: int) -> torch.Tensor:
+    if not isinstance(t, torch.Tensor):
+        return t
+    # common cases: (bsz, seq_len, ...), (bsz, seq_len), (seq_len, ...)
+    if t.dim() >= 2 and t.size(1) == seq_len:
+        return t[:, start_idx:end_idx, ...]
+    return t
 
 class InnerLoopAssociativeLayerWrapper(nn.Module):
     """
@@ -178,109 +192,26 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             pos = torch.cat([seg_pos, mem_pos], dim=1)
         return pos
 
-    def _build_segment_mask(self, attention_mask: torch.Tensor, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
-        # attention_mask: (bsz, seg_len) for real tokens only
-        bsz, seg_len = attention_mask.shape
-        extra = self.num_mem_tokens + int(self.use_sink)
-        total = seg_len + extra
-        # Base causal mask over real tokens, expanded to total query length
-        base4d = attn_mask_to_4d(attention_mask.to(dtype), upper=False, query_len=total)  # (b,1,total,seg_len)
-        mask = torch.ones(bsz, 1, total, total, dtype=dtype, device=device)
-        # Place real-token columns starting after sink (if any)
-        start_col = int(self.use_sink)
-        mask[:, :, :, start_col:start_col + seg_len] = base4d
-        # Sink cannot attend to others
-        if self.use_sink:
-            mask[:, :, 0, 1:] = 0
-        # Real tokens cannot attend to memory tokens
-        if self.num_mem_tokens > 0:
-            mask[:, :, : total - self.num_mem_tokens, total - self.num_mem_tokens :] = 0
-        # Invert to additive mask as expected by attention: allowed->0, masked->-inf
-        mask = invert_attn_mask(mask, dtype)
-        return mask
 
     def pad_attention_mask(self, attention_mask: torch.Tensor, dtype: torch.dtype):
-        if self.num_mem_tokens in {0, None}:
+        if self.num_mem_tokens in {0, None} and not self.use_sink:
             return attention_mask
         shape = list(attention_mask.shape)
         if len(shape) == 4:
-            # For 4D masks (from attn_mask_to_4d), only extend the KV dimension (dim=-1)
-            # The query dimension (dim=-2) should remain unchanged
             shape[-1] += self.num_mem_tokens + int(self.use_sink)
+            shape[-2] += self.num_mem_tokens + int(self.use_sink)
             mask = torch.ones(*shape, dtype=dtype).to(attention_mask.device)
-            mask[..., int(self.use_sink):-self.num_mem_tokens] = attention_mask
+            mask[..., int(self.use_sink):-self.num_mem_tokens, int(self.use_sink):-self.num_mem_tokens] = attention_mask
             if self.use_sink:
                 mask[..., 0, 1:] = 0
             mask[..., :-self.num_mem_tokens, -self.num_mem_tokens:] = 0
-            if not os.environ.get("NOT_INVERT_ATTN_MASK"):
-                mask = invert_attn_mask(mask, dtype)
-        else:
+        elif len(shape) == 2:
             shape[-1] += self.num_mem_tokens + int(self.use_sink)
             mask = torch.ones(*shape, dtype=dtype).to(attention_mask.device)
             mask[..., int(self.use_sink):-self.num_mem_tokens] = attention_mask
+        else:
+            raise ValueError("Attention mask must be 2D or 4D")
         return mask.to(dtype)
-
-    def pad_prev_seg_attn_mask(self, prev_seg_attn_mask: torch.Tensor, dtype: torch.dtype):
-        if self.num_mem_tokens in {0, None}:
-            return prev_seg_attn_mask
-        # For previous segment masks, we don't need to extend the KV dimension
-        # since prev_aug_len already includes the sink and memory tokens
-        # Just return the mask as-is, but ensure it has the right dtype
-        return prev_seg_attn_mask.to(dtype)
-
-    def _build_sliding_window_mask(self, prev4d: torch.Tensor, cur4d: torch.Tensor, prev_aug_len: int, cur_aug_len: int) -> torch.Tensor:
-        """
-        Build a sliding window attention mask that prevents target leak.
-        
-        Args:
-            prev4d: Previous segments mask (bsz, 1, query_len, prev_kv_len)
-            cur4d: Current segment mask (bsz, 1, query_len, cur_kv_len)
-            prev_aug_len: Length of previous augmented segments
-            cur_aug_len: Length of current augmented segment
-            
-        Returns:
-            Combined mask with proper isolation between memory and context tokens
-        """
-        bsz, _, query_len, _ = cur4d.shape
-        device = cur4d.device
-        dtype = cur4d.dtype
-        
-        # Calculate positions of memory tokens in previous and current segments
-        prev_mem_start = prev_aug_len - self.num_mem_tokens if self.num_mem_tokens > 0 else prev_aug_len
-        cur_mem_start = cur_aug_len - self.num_mem_tokens if self.num_mem_tokens > 0 else cur_aug_len
-        
-        # Create the combined mask: [prev_segments, current_segment]
-        total_kv_len = prev_aug_len + cur_aug_len
-        combined_mask = torch.ones(bsz, 1, query_len, total_kv_len, dtype=dtype, device=device)
-        
-        # Fill in previous segments mask
-        combined_mask[:, :, :, :prev_aug_len] = prev4d
-        
-        # Fill in current segment mask
-        combined_mask[:, :, :, prev_aug_len:] = cur4d
-        
-        # Now apply the key isolation rules to prevent target leak:
-        
-        # 1. Memory tokens in current segment cannot attend to context tokens from previous segments
-        if self.num_mem_tokens > 0:
-            # For memory tokens in current segment (last num_mem_tokens positions)
-            # Block attention to all context tokens from previous segments
-            combined_mask[:, :, cur_mem_start:, :prev_mem_start] = 0
-            
-        # 2. Context tokens in current segment can attend to previous context tokens (causal)
-        # This is already handled by the upper=True in prev4d
-        
-        # 3. Memory tokens in current segment can attend to previous memory tokens
-        # This is allowed and already handled by the mask construction
-        
-        # 4. Sink token (if used) cannot attend to others
-        if self.use_sink:
-            combined_mask[:, :, 0, 1:] = 0
-            
-        # Invert to additive mask as expected by attention: allowed->0, masked->-inf
-        combined_mask = invert_attn_mask(combined_mask, dtype)
-        
-        return combined_mask
 
     def _get_memory_tokens(self, batch_size: int) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         if self._get_memory is None or self.num_mem_tokens == 0:
@@ -356,9 +287,16 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         if self.use_denom and z is not None:
             z = z + (new_info_coef * mk).sum(dim=-2).detach()
         return W_mem, z, False
-
-    # ----- main forward (inner-loop segmentation) -----
+    
     def forward(self, hidden_states: torch.Tensor, attention_mask=None, *args, **kwargs):
+        return self.forward_horizontal(hidden_states, attention_mask, *args, **kwargs)
+    
+    # ----- main forward (inner-loop segmentation) -----
+    def forward_horizontal(self, hidden_states: torch.Tensor, attention_mask=None, *args, **kwargs):
+        assert not self.generate_mode, "Generate mode is not supported for horizontal forward"
+        assert attention_mask is None or attention_mask.dim() == 2, "Attention mask must be 2D"
+        assert kwargs.get("past_key_values") is None or kwargs.get("past_key_values").to_legacy_cache()[0][0] is None, "Past key values are not supported for horizontal forward"
+
         if isinstance(hidden_states, (tuple, list)):
             hidden_states = hidden_states[0]
         bsz, seq_len, _ = hidden_states.shape
@@ -368,43 +306,28 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         W_mem, z = self._alloc_initial_mem(hidden_states.device, hidden_states.dtype)
         first_seg = True
 
-        # cache plumbing
-        # Match language_modeling: enable caching only when sliding_window is on
-        use_cache = self.sliding_window
-        kwargs.pop('use_cache', None)
 
-        past_key_values = kwargs.get("past_key_values", None)
-        last_attn = None
+        past_key_values = DynamicCache()
+        past_attn_mask = None
         present_kv = None
 
         # helper to segment arbitrary tensor-like by time dim
-        def segment_tensor(t: torch.Tensor, start_idx: int, end_idx: int) -> torch.Tensor:
-            if not isinstance(t, torch.Tensor):
-                return t
-            # common cases: (bsz, seq_len, ...), (bsz, seq_len), (seq_len, ...)
-            if t.dim() >= 2 and t.size(1) == seq_len:
-                return t[:, start_idx:end_idx, ...]
-            if t.dim() >= 1 and t.size(0) == seq_len and (t.dim() == 1 or t.size(0) == t.shape[0]):
-                return t[start_idx:end_idx, ...]
-            return t
+        
 
-        prev_aug_len = 0
         for start in range(0, seq_len, self.segment_size):
             end = min(start + self.segment_size, seq_len)
             seg = hidden_states[:, start:end, :]
+            seg_len = end - start
             attn_mask = attention_mask[:, start:end] if attention_mask is not None else torch.ones_like(seg[:, :, 0])
 
             # Check if this is the last segment and we're in generate mode
             is_last_segment = (end >= seq_len)
-            should_add_memory_tokens = not (self.generate_mode and is_last_segment)
 
             mem, sink = self._get_memory_tokens(seg.size(0))
             if self.use_sink and sink is not None:
                 seg_aug = torch.cat([sink.to(seg.dtype).to(seg.device), seg, mem.to(seg.dtype).to(seg.device)], dim=1)
-            elif self.num_mem_tokens > 0 and mem is not None:
-                seg_aug = torch.cat([seg, mem.to(seg.dtype).to(seg.device)], dim=1)
             else:
-                seg_aug = seg
+                seg_aug = torch.cat([seg, mem.to(seg.dtype).to(seg.device)], dim=1)
 
             if not first_seg:
                 assoc = self._associate_with_mem(seg_aug, W_mem, z)
@@ -413,33 +336,31 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             # Build attention mask for this augmented segment
             seg_aug_len = seg_aug.size(1)
             
-            # Check if we're using cached forward pass (past_key_values provided)
-            
             if self.sliding_window:
-                # Current segment: build 4D mask at query_len = seg_aug_len
-                base_cur4d = attn_mask_to_4d(attn_mask.to(seg_aug.dtype), upper=False, query_len=seg_aug_len)
-                cur4d = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
-                if prev_aug_len > 0:
-                    # Previous segments: build 4D mask at query_len = seg_aug_len
-                    # The prev2d should have length prev_aug_len, representing previous segments
-                    prev2d = torch.ones(attn_mask.size(0), prev_aug_len, dtype=seg_aug.dtype, device=attn_mask.device)
-                    base_prev4d = attn_mask_to_4d(prev2d, upper=True, query_len=seg_aug_len)
-                    prev4d = self.pad_prev_seg_attn_mask(base_prev4d, dtype=seg_aug.dtype)
-                    
-                    # Create a proper sliding window mask that prevents target leak
-                    # We need to ensure memory tokens don't attend to context tokens across segments
-                    seg_mask = self._build_sliding_window_mask(prev4d, cur4d, prev_aug_len, seg_aug_len)
-                else:
-                    seg_mask = cur4d
-            else:
-                base_cur4d = attn_mask_to_4d(attn_mask.to(seg_aug.dtype), upper=False, query_len=seg_aug_len)
+                # print(attn_mask.shape, "attn_mask", "*"*100)
+                base_cur4d = attn_mask_to_4d(attn_mask.to(seg_aug.dtype), upper=False, query_len=seg_len)
+                # print(base_cur4d.shape, "base_cur4d", "*"*100)
                 seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
+                if not os.environ.get("NOT_INVERT_ATTN_MASK"):
+                    seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
 
+                if past_attn_mask is not None:
+                    base_past4d = attn_mask_to_4d(past_attn_mask.to(seg_aug.dtype), upper=True, query_len=seg_aug_len)
+                    if self.use_sink:
+                        base_past4d[:, :, 0, :] = 0 # sink cannot attend to others
+                    # base_past4d = torch.ones_like(base_past4d)
+                    if not os.environ.get("NOT_INVERT_ATTN_MASK"):
+                        base_past4d = invert_attn_mask(base_past4d, seg_aug.dtype)
+                    seg_mask = torch.cat([base_past4d, seg_mask], dim=-1)
+            else:
+                # For non-sliding window, use the simple segment 2D mask builder
+                seg_mask = self.pad_attention_mask(attn_mask, dtype=seg_aug.dtype)
+            
             seg_pos_ids = self._get_segment_positions(kwargs.get("position_ids", None), start, end, seg_aug.device)
 
             # Segment incoming args/kwargs by time where applicable
-            seg_args = tuple(segment_tensor(a, start, end) if isinstance(a, torch.Tensor) else a for a in args)
-            seg_kwargs = {k: segment_tensor(v, start, end) for k, v in kwargs.items()}
+            seg_args = tuple(segment_tensor(a, start, end, seq_len) if isinstance(a, torch.Tensor) else a for a in args)
+            seg_kwargs = {k: segment_tensor(v, start, end, seq_len) for k, v in kwargs.items()}
 
 
             
@@ -447,45 +368,45 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             seg_kwargs["attention_mask"] = seg_mask
             if seg_pos_ids is not None:
                 seg_kwargs["position_ids"] = seg_pos_ids
-            seg_kwargs["use_cache"] = use_cache
-            if past_key_values is not None:
-                seg_kwargs["past_key_values"] = self.update_past_key_values_sw(past_key_values, self.segment_size)
+            seg_kwargs["use_cache"] = self.sliding_window
+            
+            if self.sliding_window:
+                seg_kwargs["past_key_values"] = past_key_values
+
             if self._rotary_fn is not None and seg_pos_ids is not None:
                 cos, sin = self._rotary_fn(seg_aug, seg_pos_ids)
                 seg_kwargs["position_embeddings"] = (cos, sin)
 
+
+            # print(seg_aug.shape, "seg_aug", "*"*100)
+            # print(seg_mask.shape, "seg_mask", "*"*100)
+            # print(seg_kwargs["position_embeddings"][0].shape, "position_embeddings", "*"*100)
             layer_out = self.layer(seg_aug, *seg_args, **seg_kwargs)
+            if self.sliding_window:
+                assert len(past_key_values.layers) != 0, "Past key values are required for horizontal forward with sliding window"
+                past_key_values = self.update_past_key_values_sw(past_key_values, self.segment_size)
             if isinstance(layer_out, tuple):
                 seg_out = layer_out[0]
-                if len(layer_out) > 1:
-                    last_attn = layer_out[1]
-                if len(layer_out) > 2:
-                    present_kv = layer_out[2]
-                    past_key_values = present_kv
             else:
                 seg_out = layer_out
 
             real_start = int(self.use_sink)
-            real_end = real_start + seg.size(1)
+            real_end = -self.num_mem_tokens
             seg_real_out = seg_out[:, real_start:real_end, :]
             
             # Update memory only if we have memory tokens and we're not in generate mode for the last segment
-            should_update_memory = (self.num_mem_tokens > 0 and 
-                                  not (self.generate_mode and is_last_segment))
-            
-            if should_update_memory:
-                seg_mem_out = seg_out[:, -self.num_mem_tokens :, :]
-                W_mem, z, first_seg = self._update_mem_with_mem(
-                    seg_mem_out, W_mem, z, first_seg
-                )
-            else:
-                first_seg = False
+            seg_mem_out = seg_out[:, real_end:, :]
+            W_mem, z, first_seg = self._update_mem_with_mem(
+                seg_mem_out, W_mem, z, first_seg
+            )
+            first_seg = False
 
             out_full.append(seg_real_out)
-            # Update prev_aug_len for next iteration - this should be the total augmented length so far
-            prev_aug_len += seg_aug_len
+
+            past_attn_mask = attn_mask
 
         merged = torch.cat(out_full, dim=1) if len(out_full) > 1 else out_full[0]
+
         # Return tensor or HF-like tuple (hidden_states, attn, present_kv)
         # if use_cache or ("output_attentions" in kwargs and kwargs["output_attentions"]):
         #     return (merged, last_attn, present_kv)
@@ -512,25 +433,17 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         # Convert to legacy cache format for easier manipulation
         if hasattr(past_key_values, 'to_legacy_cache'):
             legacy = past_key_values.to_legacy_cache()
+            legacy = past_key_values.to_legacy_cache()
         
-        # Keep only the most recent tokens within the window size
-        legacy = [
-            [
-                k_or_v[..., -window_size:, :] if k_or_v is not None else None
-                for k_or_v in seg_kv 
-            ]
-            for seg_kv in legacy
-        ]
+        # Keep only the most recent real tokens within the window size
+        k, v = legacy[self.info['layer']]
+        k = k[..., -window_size-self.num_mem_tokens:-self.num_mem_tokens, :]
+        v = v[..., -window_size-self.num_mem_tokens:-self.num_mem_tokens, :]
         
-        # Convert back to DynamicCache if possible
-        try:
-            from transformers.cache_utils import DynamicCache
-            return DynamicCache.from_legacy_cache(legacy)
-        except Exception:
-            for layer_idx in range(len(legacy)):
-                past_key_values.layers[layer_idx].keys = legacy[layer_idx][0]
-                past_key_values.layers[layer_idx].values = legacy[layer_idx][1]
-            return past_key_values
+        past_key_values.layers[self.info['layer']].keys = k
+        past_key_values.layers[self.info['layer']].values = v
+        return past_key_values
+
 
 class InnerLoopARMTForCausalLM(PreTrainedModel):
     """
@@ -670,8 +583,24 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         for layer in self.get_layers():
             layer.detach_mem()
 
-    # ----- hf api -----
     def forward(
+        self,
+        input_ids=None,
+        labels=None,
+        labels_mask=None,
+        inputs_embeds=None,
+        attention_mask=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        input_segmented=False,
+        output_only_last_segment=False,
+        num_items_in_batch=None,
+        use_cache=None,
+        past_key_values=None,
+    ):
+        return self.forward_horizontal(input_ids, labels, labels_mask, inputs_embeds, attention_mask, output_attentions, output_hidden_states, input_segmented, output_only_last_segment, num_items_in_batch, use_cache, past_key_values)
+    # ----- hf api -----
+    def forward_horizontal(
         self,
         input_ids=None,
         labels=None,
@@ -724,59 +653,55 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         INEFFICIENT: recomputes the entire sequence on every token generation.
         Kept for reference and testing purposes.
         """
-        self.generate_mode(True)
-        try:
-            max_new_tokens = generate_kwargs.get('max_new_tokens', 1)
-            eos_token_id = generate_kwargs.get('eos_token_id', None)
-            return_logits = generate_kwargs.get('return_logits', False)
-            
-            generated_ids = None
-            all_logits = []
+        max_new_tokens = generate_kwargs.get('max_new_tokens', 1)
+        eos_token_id = generate_kwargs.get('eos_token_id', None)
+        return_logits = generate_kwargs.get('return_logits', False)
+        
+        generated_ids = None
+        all_logits = []
 
-            # Process tokens one by one to ensure perfect alignment
-            for i in range(max_new_tokens):
-                # Prepare the full sequence for this step
-                if generated_ids is not None:
-                    current_input_ids = torch.cat([input_ids, generated_ids], dim=-1)
-                    current_attention_mask = torch.cat([attention_mask, torch.ones_like(generated_ids)], dim=-1)
-                else:
-                    current_input_ids = input_ids
-                    current_attention_mask = attention_mask
-                
-                # Process the full sequence through the inner loop
-                # Reset memory state before each forward pass to ensure complete independence
-                self.zero_mem()
-                
-                with torch.no_grad():
-                    outputs = self.forward(
-                        input_ids=current_input_ids,
-                        attention_mask=current_attention_mask
-                    )
-                    next_token_logits = outputs.logits[:, -1, :]
-                
-                # Get next token
-                next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
-                
-                if generated_ids is not None:
-                    generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
-                else:
-                    generated_ids = next_token_id
-                
-                # Store the logits that were actually used to generate the next token
-                if return_logits:
-                    all_logits.append(next_token_logits)
-                
-                # Check for EOS
-                if eos_token_id is not None and (next_token_id == eos_token_id).all():
-                    break
-            
-            if return_logits:
-                # Return the logits that were actually used for generation during the loop
-                return generated_ids, torch.stack(all_logits, dim=1)
+        # Process tokens one by one to ensure perfect alignment
+        for i in range(max_new_tokens):
+            # Prepare the full sequence for this step
+            if generated_ids is not None:
+                current_input_ids = torch.cat([input_ids, generated_ids], dim=-1)
+                current_attention_mask = torch.cat([attention_mask, torch.ones_like(generated_ids)], dim=-1)
             else:
-                return generated_ids
-        finally:
-            self.generate_mode(False)
+                current_input_ids = input_ids
+                current_attention_mask = attention_mask
+            
+            # Process the full sequence through the inner loop
+            # Reset memory state before each forward pass to ensure complete independence
+            self.zero_mem()
+            
+            with torch.no_grad():
+                outputs = self.forward(
+                    input_ids=current_input_ids,
+                    attention_mask=current_attention_mask
+                )
+                next_token_logits = outputs.logits[:, -1, :]
+            
+            # Get next token
+            next_token_id = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+            
+            if generated_ids is not None:
+                generated_ids = torch.cat([generated_ids, next_token_id], dim=-1)
+            else:
+                generated_ids = next_token_id
+            
+            # Store the logits that were actually used to generate the next token
+            if return_logits:
+                all_logits.append(next_token_logits)
+            
+            # Check for EOS
+            if eos_token_id is not None and (next_token_id == eos_token_id).all():
+                break
+        
+        if return_logits:
+            # Return the logits that were actually used for generation during the loop
+            return generated_ids, torch.stack(all_logits, dim=1)
+        else:
+            return generated_ids
 
     def _generate_sliding_window(self, input_ids, attention_mask=None, **generate_kwargs):
         """
