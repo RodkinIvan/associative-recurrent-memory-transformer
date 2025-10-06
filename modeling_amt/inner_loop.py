@@ -9,13 +9,23 @@ from transformers import PreTrainedModel, PretrainedConfig
 from transformers.cache_utils import DynamicCache
 
 # Reuse utilities from the existing implementation to ensure identical math
-from modeling_amt.language_modeling import DPFP, invert_attn_mask, attn_mask_to_4d
+from modeling_amt.language_modeling import DPFP, invert_attn_mask as _invert_attn_mask, attn_mask_to_4d
 
 def reverse_invert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
+    if os.environ.get("NOT_INVERT_ATTN_MASK"):
+        return mask
     mask = mask.clone().long()
     mask[mask > -1] = 1
     mask[mask < -1] = 0
     return mask
+
+def attn_mask_to_2d(mask: torch.Tensor) -> torch.Tensor:
+    mask = reverse_invert_attn_mask(mask)
+    mask = torch.any(mask, dim=-2)
+    mask = torch.any(mask, dim=1)
+    return mask.long()
+
+invert_attn_mask = lambda mask, dtype: (_invert_attn_mask(mask, dtype) if not os.environ.get("NOT_INVERT_ATTN_MASK") else mask)
 
 def segment_tensor(t: torch.Tensor, start_idx: int, end_idx: int, seq_len: int) -> torch.Tensor:
     if not isinstance(t, torch.Tensor):
@@ -213,6 +223,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             raise ValueError("Attention mask must be 2D or 4D")
         return mask.to(dtype)
 
+
     def _get_memory_tokens(self, batch_size: int) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor]]:
         if self._get_memory is None or self.num_mem_tokens == 0:
             return None, None
@@ -294,13 +305,17 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
     # ----- main forward (inner-loop segmentation) -----
     def forward_horizontal(self, hidden_states: torch.Tensor, attention_mask=None, *args, **kwargs):
         assert not self.generate_mode, "Generate mode is not supported for horizontal forward"
-        assert attention_mask is None or attention_mask.dim() == 2, "Attention mask must be 2D"
+        assert attention_mask is None or attention_mask.dim() == 4, "Attention mask must be 4D"
         assert kwargs.get("past_key_values") is None or kwargs.get("past_key_values").to_legacy_cache()[0][0] is None, "Past key values are not supported for horizontal forward"
 
         if isinstance(hidden_states, (tuple, list)):
             hidden_states = hidden_states[0]
         bsz, seq_len, _ = hidden_states.shape
 
+        if attention_mask is None:
+            attention_mask = torch.ones(bsz, seq_len, device=hidden_states.device, dtype=hidden_states.dtype)
+            attention_mask = attn_mask_to_4d(attention_mask, upper=False, query_len=seq_len)
+            attention_mask = invert_attn_mask(attention_mask, hidden_states.dtype)
         out_full = []
 
         W_mem, z = self._alloc_initial_mem(hidden_states.device, hidden_states.dtype)
@@ -318,7 +333,9 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             end = min(start + self.segment_size, seq_len)
             seg = hidden_states[:, start:end, :]
             seg_len = end - start
-            attn_mask = attention_mask[:, start:end] if attention_mask is not None else torch.ones_like(seg[:, :, 0])
+            attn_mask = attention_mask[:, :, start:end, start:end]
+
+            # print("attn_mask", attn_mask[0][0])
 
             # Check if this is the last segment and we're in generate mode
             is_last_segment = (end >= seq_len)
@@ -338,24 +355,28 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             
             if self.sliding_window:
                 # print(attn_mask.shape, "attn_mask", "*"*100)
-                base_cur4d = attn_mask_to_4d(attn_mask.to(seg_aug.dtype), upper=False, query_len=seg_len)
                 # print(base_cur4d.shape, "base_cur4d", "*"*100)
+                base_cur4d = reverse_invert_attn_mask(attn_mask)
                 seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
-                if not os.environ.get("NOT_INVERT_ATTN_MASK"):
-                    seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
+                seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
 
                 if past_attn_mask is not None:
-                    base_past4d = attn_mask_to_4d(past_attn_mask.to(seg_aug.dtype), upper=True, query_len=seg_aug_len)
+
+                    base_past4d = attn_mask_to_4d(attn_mask_to_2d(past_attn_mask), upper=True, query_len=seg_aug_len)
                     if self.use_sink:
                         base_past4d[:, :, 0, :] = 0 # sink cannot attend to others
-                    # base_past4d = torch.ones_like(base_past4d)
-                    if not os.environ.get("NOT_INVERT_ATTN_MASK"):
-                        base_past4d = invert_attn_mask(base_past4d, seg_aug.dtype)
+                    base_past4d = torch.ones_like(base_past4d)
+                    base_past4d = invert_attn_mask(base_past4d, seg_aug.dtype)
+
+                    # print(base_past4d.shape, "base_past4d", "*"*100)
+                    # print(seg_mask.shape, "seg_mask", "*"*100)
                     seg_mask = torch.cat([base_past4d, seg_mask], dim=-1)
             else:
-                # For non-sliding window, use the simple segment 2D mask builder
+                attn_mask = reverse_invert_attn_mask(attn_mask)
                 seg_mask = self.pad_attention_mask(attn_mask, dtype=seg_aug.dtype)
-            
+                seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
+            # print("seg_mask", reverse_invert_attn_mask(seg_mask)[0][0])
+            # print("seg_mask", seg_mask.shape)
             seg_pos_ids = self._get_segment_positions(kwargs.get("position_ids", None), start, end, seg_aug.device)
 
             # Segment incoming args/kwargs by time where applicable
@@ -372,6 +393,8 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             
             if self.sliding_window:
                 seg_kwargs["past_key_values"] = past_key_values
+            else:
+                seg_kwargs["past_key_values"] = None
 
             if self._rotary_fn is not None and seg_pos_ids is not None:
                 cos, sin = self._rotary_fn(seg_aug, seg_pos_ids)
@@ -381,6 +404,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             # print(seg_aug.shape, "seg_aug", "*"*100)
             # print(seg_mask.shape, "seg_mask", "*"*100)
             # print(seg_kwargs["position_embeddings"][0].shape, "position_embeddings", "*"*100)
+            # print(f"Layer {self.info['layer']}, segment start {start}")
             layer_out = self.layer(seg_aug, *seg_args, **seg_kwargs)
             if self.sliding_window:
                 assert len(past_key_values.layers) != 0, "Past key values are required for horizontal forward with sliding window"
@@ -636,15 +660,20 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             # Temporarily use inefficient implementation, as efficient implementation is not working
             return self._generate_sliding_window_inefficient(input_ids, attention_mask, **generate_kwargs)
         else:
-            return self._generate_standard(input_ids, attention_mask, **generate_kwargs)
+            # return self._generate_standard(input_ids, attention_mask, **generate_kwargs) 
+            raise NotImplementedError("Non-sliding window generation is not implemented")
     
     def _generate_standard(self, input_ids, attention_mask=None, **generate_kwargs):
         """Standard generation without sliding window."""
-        self.generate_mode(True)
-        try:
-            return self.model.generate(input_ids=input_ids, attention_mask=attention_mask, **generate_kwargs)
-        finally:
-            self.generate_mode(False)
+        generate_kwargs['output_scores'] = generate_kwargs.get('return_logits', False)
+        generate_kwargs['return_dict_in_generate'] = generate_kwargs.get('return_logits', False)
+        generate_kwargs.pop('return_logits')
+        out = self.model.generate(input_ids=input_ids, attention_mask=attention_mask, **generate_kwargs)
+        if generate_kwargs.get('output_scores', False):
+            print(out.scores)
+            return out.sequences, out.scores
+        else:
+            return out.sequences
     
     def _generate_sliding_window_inefficient(self, input_ids, attention_mask=None, **generate_kwargs):
         """
