@@ -131,6 +131,8 @@ parser.add_argument('--freeze_mem', action='store_true', default=False,
 parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner'], default='outer',
+                    help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 # XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
@@ -360,6 +362,8 @@ if __name__ == '__main__':
 
     # define model
     model_cls = get_cls_by_name(args.model_cls)
+    armt_base_model_config = None
+    armt_base_model_name = None
 
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
@@ -373,16 +377,19 @@ if __name__ == '__main__':
             model_cfg['time_penalty'] = args.time_penalty
             model_cfg['constant_depth'] = args.constant_depth
         model = model_cls(config=model_cfg)
+        armt_base_model_config = model_cfg
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
         model_args = dict()
         if args.grad_cp:
             model_args['grad_cp'] = args.grad_cp
         model = model_cls.from_pretrained(args.from_pretrained, **model_args)
+        armt_base_model_name = args.from_pretrained
 
     # ## add [GEN] token
     # model.resize_token_embeddings(len(tokenizer))
     
+    backbone_state_dict = None
     ## load cpt of backbone model
     if args.backbone_cpt:
 
@@ -395,15 +402,41 @@ if __name__ == '__main__':
         cpt = safetensors.torch.load_file(model_cpt)
         w = model.load_state_dict(cpt, strict=True)
         logger.info(f'loaded model with mis w {w}')
+        if args.armt_impl == 'inner':
+            backbone_state_dict = cpt
 
-    # Pass memory settings to pretrained model
-    if True:
-        
+    use_inner_armt = args.armt_impl == 'inner'
+    if use_inner_armt:
+        assert not args.act_on, "Not yet implemented"
+        if args.num_mem_tokens is None:
+            raise ValueError('--armt_impl inner requires --num_mem_tokens to be set')
+        from modeling_amt.model import ARMTConfig
+        from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
+
+        layers_attr = args.layers_attr if args.layers_attr is not None else 'model.layers'
+        armt_config = ARMTConfig(
+            base_model_name=armt_base_model_name,
+            base_model_config=armt_base_model_config,
+            num_mem_tokens=args.num_mem_tokens,
+            d_mem=args.d_mem,
+            segment_size=block_size,
+            segment_alignment='left',
+            layers_attr=layers_attr,
+            wrap_pos=args.wrap_pos,
+            n_heads=1,
+        )
+        logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
+        model = InnerLoopARMTForCausalLM(config=armt_config)
+        logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
+
+        if backbone_state_dict is not None:
+            load_info = model.load_state_dict(backbone_state_dict, strict=False)
+            logger.info(f'Loaded backbone state dict into inner ARMT (missing={load_info.missing_keys}, unexpected={load_info.unexpected_keys})')
+    else:
         memory_cell_cls = get_cls_by_name(args.memory_cell_cls)
         recurrent_wrapper_cls = get_cls_by_name(args.recurrent_wrapper_cls)
         logger.info(f'Wrapping in: {memory_cell_cls} and {recurrent_wrapper_cls}')
-        
-        
+
         mem_cell_args = dict(
             base_model=model,
         )
@@ -413,7 +446,7 @@ if __name__ == '__main__':
         if args.act_on:
             mem_cell_args['act_on'] = args.act_on
             mem_cell_args['max_hop'] = args.max_hop
-            
+
             if args.act_type is not None:
                 mem_cell_args['act_type'] = args.act_type
 
@@ -423,7 +456,6 @@ if __name__ == '__main__':
                 mem_cell_args['noisy_halting'] = args.noisy_halting
             if args.constant_depth:
                 mem_cell_args['constant_depth'] = args.constant_depth
-
 
         if args.num_mem_tokens is not None:
             mem_cell_args['num_mem_tokens'] = args.num_mem_tokens
@@ -438,50 +470,48 @@ if __name__ == '__main__':
         if args.no_correction:
             mem_cell_args['correction'] = False
 
-        
-
         cell = memory_cell_cls(**mem_cell_args)
 
-        model = recurrent_wrapper_cls(cell, 
-                                      segment_size=block_size,
-                                      max_n_segments=args.max_n_segments, 
-                                    #   vary_n_segments=args.vary_n_segments,
-                                      k2=args.k2,
-                                      segment_alignment=args.segment_alignment,
-                                      act_on=args.act_on,
-                                      time_penalty=args.time_penalty
+        model = recurrent_wrapper_cls(
+            cell,
+            segment_size=block_size,
+            max_n_segments=args.max_n_segments,
+            #   vary_n_segments=args.vary_n_segments,
+            k2=args.k2,
+            segment_alignment=args.segment_alignment,
+            act_on=args.act_on,
+            time_penalty=args.time_penalty
         )
-                                    
 
-        if 'armt' in args.model_path:
+    if 'armt' in args.model_path:
 
-            assert args.num_timesteps == args.num_test_timesteps
-            def spliter(x):
-                assert x.size(1) == (args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1, f'{x.size(1)} != {(args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1}'
-                return [x[:, i*block_size:(i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size:],]
-            def spliter_input_rule(x):
-                assert x.size(1) == args.rule_len + (args.num_timesteps + 1 - args.repeat_state) * block_size, f'{x.size(1)} != {args.rule_len + 1 + (args.num_timesteps + 1 - args.repeat_state) * block_size+ 1}'
-                return [x[:, 0:args.rule_len]] + [x[:, args.rule_len + i*block_size:args.rule_len + (i+1)*block_size] for i in range(args.num_timesteps - args.repeat_state - 1)] + [x[:, (args.num_timesteps-args.repeat_state)*block_size + args.rule_len:],]
-            
-            if args.learn_rule:
-                model.split_tensor = spliter
-            if args.input_rule:
-                model.split_tensor = spliter_input_rule
-        
-        ## load cpt of rmt
-        if args.model_cpt and args.model_cpt != 'None':
-            
-            model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
-            if os.path.exists(model_cpt):
-                cpt = torch.load(model_cpt, map_location='cpu')
-                model.load_state_dict(cpt)
-            else:
-                import safetensors
-                model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
-                cpt = safetensors.torch.load_file(model_cpt)
-                w = model.load_state_dict(cpt, strict=False)
-                logger.info(f'loaded model with mis w {w}')
-            logger.info(f'Loaded model state dict from: {args.model_cpt}')
+        assert args.num_timesteps == args.num_test_timesteps
+
+        def spliter(x):
+            assert x.size(1) == (args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1, f'{x.size(1)} != {(args.num_timesteps + 1 - args.repeat_state) * block_size + args.rule_len + 1}'
+            return [x[:, i * block_size:(i + 1) * block_size] for i in range(args.num_timesteps - args.repeat_state)] + [x[:, (args.num_timesteps - args.repeat_state) * block_size:], ]
+
+        def spliter_input_rule(x):
+            assert x.size(1) == args.rule_len + (args.num_timesteps + 1 - args.repeat_state) * block_size, f'{x.size(1)} != {args.rule_len + 1 + (args.num_timesteps + 1 - args.repeat_state) * block_size+ 1}'
+            return [x[:, 0:args.rule_len]] + [x[:, args.rule_len + i * block_size:args.rule_len + (i + 1) * block_size] for i in range(args.num_timesteps - args.repeat_state - 1)] + [x[:, (args.num_timesteps - args.repeat_state) * block_size + args.rule_len:], ]
+
+        if args.learn_rule:
+            model.split_tensor = spliter
+        if args.input_rule:
+            model.split_tensor = spliter_input_rule
+
+    if args.model_cpt and args.model_cpt != 'None':
+        model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
+        if os.path.exists(model_cpt):
+            cpt = torch.load(model_cpt, map_location='cpu')
+            model.load_state_dict(cpt)
+        else:
+            import safetensors
+            model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
+            cpt = safetensors.torch.load_file(model_cpt)
+            w = model.load_state_dict(cpt, strict=False)
+            logger.info(f'loaded model with mis w {w}')
+        logger.info(f'Loaded model state dict from: {args.model_cpt}')
     if args.freeze_model_weights:
         for n, p in model.named_parameters():
             # if 'memory' not in n and 'wte' not in n:
