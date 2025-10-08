@@ -294,7 +294,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         mb = self._to_heads(torch.sigmoid(self.W_mb(mem_tokens)))
         einop = f"ihjk,ihjt,ihj{'t' if self.gating else 'x'}->ihkt"
         associations = torch.einsum(einop, mk, mv, mb)
-        W_mem = W_mem + associations.detach()
+        W_mem = W_mem + associations
         if self.use_denom and z is not None:
             z = z + (new_info_coef * mk).sum(dim=-2).detach()
         return W_mem, z, False
@@ -394,17 +394,41 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             if self.sliding_window:
                 seg_kwargs["past_key_values"] = past_key_values
             else:
-                seg_kwargs["past_key_values"] = None
+                # In non-sliding mode, ensure no cache is used by the underlying layer
+                seg_kwargs.pop("layer_past", None)
+                seg_kwargs.pop("cache_position", None)
+                seg_kwargs.pop("past_key_values", None)
+                seg_kwargs["use_cache"] = False
 
             if self._rotary_fn is not None and seg_pos_ids is not None:
                 cos, sin = self._rotary_fn(seg_aug, seg_pos_ids)
                 seg_kwargs["position_embeddings"] = (cos, sin)
 
 
-            # print(seg_aug.shape, "seg_aug", "*"*100)
-            # print(seg_mask.shape, "seg_mask", "*"*100)
-            # print(seg_kwargs["position_embeddings"][0].shape, "position_embeddings", "*"*100)
+            # print("seg_aug.shape", seg_aug.shape)
+            # print("seg_mask.shape", seg_mask.shape)
+            # # print(seg_kwargs["position_embeddings"][0].shape, "position_embeddings", "*"*100)
             # print(f"Layer {self.info['layer']}, segment start {start}")
+            
+            # if past_key_values is not None and len(past_key_values.layers) != 0 and past_key_values.layers[self.info['layer']].keys is not None:
+            #     print(f"past_key_values: {past_key_values.layers[self.info['layer']].keys.shape}")
+            # else:
+            #     print(f"past_key_values: None")
+            # print("use_cache", seg_kwargs.get("use_cache"))
+            # print("seg_kwargs keys", seg_kwargs.keys())
+            # for k, v in seg_kwargs.items():
+            #     if k == "position_embeddings":
+            #         continue
+            #     if isinstance(v, torch.Tensor):
+            #         print(f"{k}: {v.shape}")
+            #     else:
+            #         print(f"{k}: {v}")
+            # for v in seg_args:
+            #     if isinstance(v, torch.Tensor):
+            #         print(f"seg_args: {v.shape}")
+            #     else:
+            #         print(f"seg_args: {v}")
+
             layer_out = self.layer(seg_aug, *seg_args, **seg_kwargs)
             if self.sliding_window:
                 assert len(past_key_values.layers) != 0, "Past key values are required for horizontal forward with sliding window"
@@ -639,9 +663,19 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         use_cache=None,
         past_key_values=None,
     ):
+        # Apply labels_mask by mapping masked positions to -100 (ignored by loss)
+        effective_labels = labels
+        if labels is not None and labels_mask is not None:
+            if isinstance(labels_mask, torch.Tensor):
+                mask_bool = labels_mask.bool() if labels_mask.dtype != torch.bool else labels_mask
+                effective_labels = labels.masked_fill(~mask_bool, -100)
+            else:
+                raise ValueError("labels_mask must be a torch.Tensor")
+                effective_labels = labels
+
         out = self.model(
             input_ids=input_ids,
-            labels=labels,
+            labels=effective_labels,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
