@@ -1,5 +1,6 @@
 import math
 import os
+import inspect
 from typing import Optional, Tuple, Callable
 
 import torch
@@ -31,6 +32,8 @@ def is_empty_past_key_values(past_key_values: Optional[DynamicCache], layer_idx:
     if past_key_values is None:
         return True
     if len(past_key_values.layers) == 0:
+        return True
+    if len(past_key_values.layers) <= layer_idx:
         return True
     if past_key_values.layers[layer_idx].keys is None:
         return True
@@ -299,8 +302,46 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             z = z + (new_info_coef * mk).sum(dim=-2).detach()
         return W_mem, z, False
     
-    def forward(self, hidden_states: torch.Tensor, attention_mask=None, *args, **kwargs):
-        return self.forward_horizontal(hidden_states, attention_mask, *args, **kwargs)
+    def forward(self, hidden_states: torch.Tensor, *args, **kwargs):
+        """
+        Convert positional args of the wrapped HF block into keyword args by
+        introspecting the block's forward signature. This prevents accidental
+        misplacement (e.g., a cache object being treated as attention_mask).
+        """
+        # Map positional args to their parameter names (excluding self & hidden_states)
+        try:
+            sig = inspect.signature(self.layer.forward)
+            params = list(sig.parameters.values())
+            # Drop the first param which should be 'self' for bound method
+            param_names = [p.name for p in params[1:]]
+            # If the next parameter is hidden_states, drop it as well
+            if len(param_names) > 0 and param_names[0] in {"hidden_states", "x"}:
+                param_names = param_names[1:]
+        except Exception:
+            param_names = []
+
+        for idx, arg in enumerate(args):
+            if idx >= len(param_names):
+                break
+            name = param_names[idx]
+            if name not in kwargs:
+                kwargs[name] = arg
+
+        # Normalize cache kwarg name to 'past_key_values'
+        if "layer_past" in kwargs and "past_key_values" not in kwargs:
+            layer_past = kwargs.pop("layer_past")
+            try:
+                if isinstance(layer_past, DynamicCache):
+                    kwargs["past_key_values"] = layer_past
+                else:
+                    kwargs["past_key_values"] = DynamicCache.from_legacy_cache(layer_past)
+            except Exception:
+                kwargs["past_key_values"] = layer_past
+
+        # Extract attention mask (avoid passing both positional & kwarg duplicates)
+        attention_mask = kwargs.pop("attention_mask", None)
+
+        return self.forward_horizontal(hidden_states, attention_mask, **kwargs)
     
     # ----- main forward (inner-loop segmentation) -----
     def forward_horizontal(self, hidden_states: torch.Tensor, attention_mask=None, *args, **kwargs):
@@ -328,7 +369,10 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             first_seg = True
 
 
-        past_key_values = kwargs.get("past_key_values") if using_cache else DynamicCache()
+        # Always use provided cache object if present, even if currently empty,
+        # so upstream callers can observe in-place mutations across segments.
+        provided_cache = kwargs.get("past_key_values")
+        past_key_values = provided_cache if provided_cache is not None else DynamicCache()
         past_attn_mask = kwargs.get('past_attn_mask') if using_cache else None
         present_kv = None
 
@@ -377,6 +421,8 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                     # print(base_past4d.shape, "base_past4d", "*"*100)
                     # print(seg_mask.shape, "seg_mask", "*"*100)
                     seg_mask = torch.cat([base_past4d, seg_mask], dim=-1)
+                if os.environ.get("ARMT_DEBUG_SW"):
+                    print(f"[H-SEG] L{self.info['layer']} seg_len={seg_len} seg_aug_len={seg_aug_len} mask={tuple(seg_mask.shape)}")
             else:
                 attn_mask = reverse_invert_attn_mask(attn_mask)
                 seg_mask = self.pad_attention_mask(attn_mask, dtype=seg_aug.dtype)
@@ -413,8 +459,17 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
 
             layer_out = self.layer(seg_aug, *seg_args, **seg_kwargs)
             if self.sliding_window:
-                assert len(past_key_values.layers) != 0, "Past key values are required for horizontal forward with sliding window"
+                assert past_key_values is not None, "Past key values object must be provided"
+                # In-place update & trim so outer references observe changes
+                if os.environ.get("ARMT_DEBUG_SW"):
+                    k = past_key_values.layers[self.info['layer']].keys
+                    v = past_key_values.layers[self.info['layer']].values
+                    print(f"[H-CACHE:pre] L{self.info['layer']} K={tuple(k.shape) if k is not None else None} V={tuple(v.shape) if v is not None else None}")
                 past_key_values = self.update_past_key_values_sw(past_key_values, self.segment_size)
+                if os.environ.get("ARMT_DEBUG_SW"):
+                    k = past_key_values.layers[self.info['layer']].keys
+                    v = past_key_values.layers[self.info['layer']].values
+                    print(f"[H-CACHE:post] L{self.info['layer']} K={tuple(k.shape) if k is not None else None} V={tuple(v.shape) if v is not None else None}")
             if isinstance(layer_out, tuple):
                 seg_out = layer_out[0]
             else:
@@ -459,7 +514,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         Update past key values for sliding window attention.
         This keeps only the most recent tokens within the window size.
         """
-        if past_key_values is None:
+        if is_empty_past_key_values(past_key_values, self.info['layer']):
             return None
             
         # Convert to legacy cache format for easier manipulation
@@ -627,11 +682,19 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         use_cache=None,
         past_key_values=None,
     ):
+        # Apply labels_mask by mapping masked positions to -100 (ignored by loss)
+        effective_labels = labels
+        if labels is not None and labels_mask is not None:
+            if isinstance(labels_mask, torch.Tensor):
+                mask_bool = labels_mask.bool() if labels_mask.dtype != torch.bool else labels_mask
+                effective_labels = labels.masked_fill(~mask_bool, -100)
+            else:
+                raise ValueError("labels_mask must be a torch.Tensor")
+        
         if self.vertical_mode:
             return self.forward_vertical(
                 input_ids=input_ids,
-                labels=labels,
-                labels_mask=labels_mask,
+                labels=effective_labels,
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 output_attentions=output_attentions,
@@ -645,8 +708,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         else:
             return self.forward_horizontal(
                 input_ids=input_ids,
-                labels=labels,
-                labels_mask=labels_mask,
+                labels=effective_labels,
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 output_attentions=output_attentions, 
@@ -660,7 +722,6 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         self,
         input_ids=None,
         labels=None,
-        labels_mask=None,
         inputs_embeds=None,
         attention_mask=None,
         output_attentions=None,
@@ -706,7 +767,6 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         seg_inputs_embeds = split_tensor(inputs_embeds, self.segment_size, self.segment_alignment) if inputs_embeds is not None else None
         seg_attention_mask = split_tensor(attention_mask, self.segment_size, self.segment_alignment) if attention_mask is not None else None
         seg_labels = split_tensor(labels, self.segment_size, self.segment_alignment) if labels is not None else None
-        seg_labels_mask = split_tensor(labels_mask, self.segment_size, self.segment_alignment) if labels_mask is not None else None
         # Assemble list of per-segment dicts
         num_segments = len(seg_input_ids) if seg_input_ids is not None else len(seg_inputs_embeds) 
         segments = []
@@ -716,7 +776,6 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
                 "inputs_embeds": None if seg_inputs_embeds is None else seg_inputs_embeds[i],
                 "attention_mask": None if seg_attention_mask is None else seg_attention_mask[i],
                 "labels": None if seg_labels is None else seg_labels[i],
-                "labels_mask": None if seg_labels_mask is None else seg_labels_mask[i],
             })
 
         # Sliding window state across segments
@@ -728,6 +787,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
 
         # Run each segment through the base model; per-layer memory persists inside wrappers
         seg_outputs = []
+        layers = self.get_layers()
         for seg in segments:
             seg_len = seg["input_ids"].size(1) if seg.get("input_ids") is not None else seg["inputs_embeds"].size(1)
             if seg.get("attention_mask") is None:
@@ -740,6 +800,29 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             # Absolute position ids (match horizontal behavior when given position_ids=None)
             position_ids = torch.arange(pos_offset, pos_offset + seg_len, device=device).long().unsqueeze(0)
 
+            # Temporarily wrap each layer to inject past_attn_mask into kwargs
+            orig_forwards = [ly.forward for ly in layers]
+            seg_past_attn_mask = past_attn_mask
+            def _inject_mask(orig_fn, mask):
+                def _wrapped(hs, *a, **k):
+                    # Inject past attention mask and shared cache at layer level to mirror horizontal
+                    if mask is not None:
+                        if 'past_attn_mask' not in k:
+                            k['past_attn_mask'] = mask
+                        # Ensure using shared DynamicCache for this segment
+                        if 'past_key_values' not in k or k['past_key_values'] is None:
+                            k['past_key_values'] = shared_cache
+                        # Guard against blocks that expect a tuple per layer
+                        if hasattr(k['past_key_values'], 'layers') and len(k['past_key_values'].layers) < len(layers):
+                            # Extend layers with empty entries up to current depth
+                            needed = len(layers) - len(k['past_key_values'].layers)
+                            k['past_key_values'].layers.extend([type(k['past_key_values'].layers[0])() for _ in range(needed)])
+                        k['use_cache'] = True
+                    return orig_fn(hs, *a, **k)
+                return _wrapped
+            for i, ly in enumerate(layers):
+                ly.forward = _inject_mask(orig_forwards[i], seg_past_attn_mask)
+
             out = self.model(
                 input_ids=seg.get("input_ids"),
                 inputs_embeds=seg.get("inputs_embeds"),
@@ -749,13 +832,31 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
                 output_hidden_states=output_hidden_states,
                 use_cache=use_sliding,
                 past_key_values=shared_cache if use_sliding else None,
-                past_attn_mask=past_attn_mask if use_sliding else None,
             )
+            if os.environ.get("ARMT_DEBUG_SW"):
+                print(f"[V-SEG] seg_len={seg_len} cur4d={tuple(cur4d.shape)} pos=({int(position_ids[0,0])},{int(position_ids[0,-1])})")
+                if hasattr(out, 'past_key_values') and out.past_key_values is not None:
+                    try:
+                        k = out.past_key_values.layers[0].keys
+                        v = out.past_key_values.layers[0].values
+                        print(f"[V-CACHE:out] L0 K={tuple(k.shape) if k is not None else None} V={tuple(v.shape) if v is not None else None}")
+                    except Exception:
+                        pass
+            # Restore original forwards
+            for i, ly in enumerate(layers):
+                ly.forward = orig_forwards[i]
             seg_outputs.append(out)
 
             if use_sliding:
                 # Update cache and past attention for next segment
                 shared_cache = out.past_key_values if hasattr(out, 'past_key_values') else shared_cache
+                if os.environ.get("ARMT_DEBUG_SW") and shared_cache is not None:
+                    try:
+                        k = shared_cache.layers[0].keys
+                        v = shared_cache.layers[0].values
+                        print(f"[V-CACHE:posttrim] L0 K={tuple(k.shape) if k is not None else None} V={tuple(v.shape) if v is not None else None}")
+                    except Exception:
+                        pass
                 past_attn_mask = cur4d
             pos_offset += seg_len
 
@@ -808,7 +909,6 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         self,
         input_ids=None,
         labels=None,
-        labels_mask=None,
         inputs_embeds=None,
         attention_mask=None,
         output_attentions=None,
@@ -818,19 +918,10 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         use_cache=None,
         past_key_values=None,
     ):
-        # Apply labels_mask by mapping masked positions to -100 (ignored by loss)
-        effective_labels = labels
-        if labels is not None and labels_mask is not None:
-            if isinstance(labels_mask, torch.Tensor):
-                mask_bool = labels_mask.bool() if labels_mask.dtype != torch.bool else labels_mask
-                effective_labels = labels.masked_fill(~mask_bool, -100)
-            else:
-                raise ValueError("labels_mask must be a torch.Tensor")
-                effective_labels = labels
 
         out = self.model(
             input_ids=input_ids,
-            labels=effective_labels,
+            labels=labels,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
