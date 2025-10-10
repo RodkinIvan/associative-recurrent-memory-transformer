@@ -179,31 +179,10 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
     ) -> torch.LongTensor:
         # If original absolute positions are provided, slice and extend for sink/memory
         if position_ids is not None:
-            seg_pos = position_ids[:, start:end]
+            return position_ids[:, start:end]
         else:
-            # Fallback: local positions starting at offset (1 if sink) for this segment
-            seg_len = end - start
-            offset = int(self.use_sink)
-            seg_pos = (
-                torch.arange(offset, offset + seg_len, device=device)
-                .long()
-                .unsqueeze(0)
-                .expand(-1, seg_len)
-            )
-
-        if self.num_mem_tokens == 0 and not self.use_sink:
-            return seg_pos
-
-        last_pos = seg_pos[:, -1:] if seg_pos.size(1) > 0 else torch.zeros_like(seg_pos[:, :1])
-        # Memory tokens continue after the last real token positions
-        mem_pos = last_pos + torch.arange(1, self.num_mem_tokens + 1, device=device).long().unsqueeze(0)
-
-        if self.use_sink:
-            sink_pos = torch.zeros_like(seg_pos[:, :1])
-            pos = torch.cat([sink_pos, seg_pos, mem_pos], dim=1)
-        else:
-            pos = torch.cat([seg_pos, mem_pos], dim=1)
-        return pos
+            position_ids = torch.arange(start, end, device=device).long().unsqueeze(0)
+            return position_ids
 
 
     def pad_attention_mask(self, attention_mask: torch.Tensor, dtype: torch.dtype):
@@ -301,6 +280,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         if self.use_denom and z is not None:
             z = z + (new_info_coef * mk).sum(dim=-2).detach()
         return W_mem, z, False
+
     
     def forward(self, hidden_states: torch.Tensor, *args, **kwargs):
         """
@@ -378,23 +358,21 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
 
         # helper to segment arbitrary tensor-like by time dim
         
+        seg_num = 0
+        for start in range(0, seq_len, self.segment_size+self.num_mem_tokens+int(self.use_sink)):
+            real_start = start+int(self.use_sink)
+            real_end = min(real_start + self.segment_size, seq_len-self.num_mem_tokens)
+            end = real_end+self.num_mem_tokens
+            seg_aug = hidden_states[:, start:end, :]
+            seg_len = real_end - real_start
 
-        for start in range(0, seq_len, self.segment_size):
-            end = min(start + self.segment_size, seq_len)
-            seg = hidden_states[:, start:end, :]
-            seg_len = end - start
-            attn_mask = attention_mask[:, :, start:end, start:end]
+            attn_mask = attention_mask[:, :, real_start:real_end, real_start:real_end]
 
             # print("attn_mask", attn_mask[0][0])
 
             # Check if this is the last segment and we're in generate mode
             is_last_segment = (end >= seq_len)
 
-            mem, sink = self._get_memory_tokens(seg.size(0))
-            if self.use_sink and sink is not None:
-                seg_aug = torch.cat([sink.to(seg.dtype).to(seg.device), seg, mem.to(seg.dtype).to(seg.device)], dim=1)
-            else:
-                seg_aug = torch.cat([seg, mem.to(seg.dtype).to(seg.device)], dim=1)
 
             if not first_seg:
                 assoc = self._associate_with_mem(seg_aug, W_mem, z)
@@ -415,7 +393,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                     base_past4d = attn_mask_to_4d(attn_mask_to_2d(past_attn_mask), upper=True, query_len=seg_aug_len)
                     if self.use_sink:
                         base_past4d[:, :, 0, :] = 0 # sink cannot attend to others
-                    base_past4d = torch.ones_like(base_past4d)
+                    # base_past4d = torch.ones_like(base_past4d)
                     base_past4d = invert_attn_mask(base_past4d, seg_aug.dtype)
 
                     # print(base_past4d.shape, "base_past4d", "*"*100)
@@ -424,8 +402,8 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                 if os.environ.get("ARMT_DEBUG_SW"):
                     print(f"[H-SEG] L{self.info['layer']} seg_len={seg_len} seg_aug_len={seg_aug_len} mask={tuple(seg_mask.shape)}")
             else:
-                attn_mask = reverse_invert_attn_mask(attn_mask)
-                seg_mask = self.pad_attention_mask(attn_mask, dtype=seg_aug.dtype)
+                base_cur4d = reverse_invert_attn_mask(attn_mask)
+                seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
                 seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
             # print("seg_mask", reverse_invert_attn_mask(seg_mask)[0][0])
             # print("seg_mask", seg_mask.shape)
@@ -475,21 +453,18 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             else:
                 seg_out = layer_out
 
-            real_start = int(self.use_sink)
-            real_end = -self.num_mem_tokens
-            seg_real_out = seg_out[:, real_start:real_end, :]
-            
-            seg_mem_out = seg_out[:, real_end:, :]
+            seg_mem_out = seg_out[:, -self.num_mem_tokens:, :]
             W_mem, z, first_seg = self._update_mem_with_mem(
                 seg_mem_out, W_mem, z, first_seg
             )
             first_seg = False
 
-            out_full.append(seg_real_out)
+            out_full.append(seg_out)
 
             past_attn_mask = attn_mask
+            seg_num += 1
 
-        merged = torch.cat(out_full, dim=1) if len(out_full) > 1 else out_full[0]
+        merged = torch.cat(out_full, dim=1)
 
         # Persist updated memory state for vertical mode to reuse across segments
         self.memory_state = (W_mem, z)
@@ -589,6 +564,8 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         self.d_mem = int(getattr(config, "d_mem", 512))
         self.segment_size = int(getattr(config, "segment_size", 512))
         self.segment_alignment = getattr(config, "segment_alignment", "left")
+        if self.segment_alignment != 'left':
+            raise 
         self.layers_attr = getattr(config, "layers_attr", "model.layers")
         self.correction = bool(getattr(config, "correction", True))
         self.n_heads = int(getattr(config, "n_heads", 1))
@@ -668,6 +645,73 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         for layer in self.get_layers():
             layer.detach_mem()
 
+    def augment_sequence(self, hidden_states: torch.Tensor, mem: torch.Tensor, sink: torch.Tensor = None):
+        segments = torch.split(hidden_states, self.segment_size, dim=1)
+        if sink is not None:
+            augmented_segments = [torch.cat([sink.to(segment.dtype).to(segment.device), segment, mem.to(segment.dtype).to(segment.device)], dim=1) for segment in segments]
+        else:
+            augmented_segments = [torch.cat([segment, mem.to(segment.dtype).to(segment.device)], dim=1) for segment in segments]
+        augmented_sequence = torch.cat(augmented_segments, dim=1)
+
+        return augmented_sequence
+
+    def clean_sequence(self, hidden_states: torch.Tensor):
+        augmented_segments = torch.split(hidden_states, self.segment_size+self.num_mem_tokens+int(self.use_sink), dim=1)
+        segments = [segment[:, int(self.use_sink):-self.num_mem_tokens] for segment in augmented_segments]
+        return torch.cat(segments, dim=1)
+
+    def augment_attention_mask(self, attention_mask: torch.Tensor):
+        segments = torch.split(attention_mask, self.segment_size, dim=1)
+        if self.use_sink:
+            augmented_segments = [torch.cat([
+                torch.ones(segment.shape[0], 1, device=segment.device, dtype=segment.dtype), 
+                segment, 
+                torch.ones(segment.shape[0], self.num_mem_tokens, device=segment.device, dtype=segment.dtype)
+            ], dim=1) for segment in segments]
+        else:
+            augmented_segments = [torch.cat([
+                segment, 
+                torch.ones(segment.shape[0], self.num_mem_tokens, device=segment.device, dtype=segment.dtype)
+            ], dim=1) for segment in segments]
+        augmented_attention_mask = torch.cat(augmented_segments, dim=1)
+        return augmented_attention_mask
+
+    def augment_labels(self, labels):
+        if labels is None:
+            return None
+        first = labels[:, :1]
+        segments = torch.split(labels[:, 1:], self.segment_size, dim=1)
+        if self.use_sink:
+            augmented_segments = [torch.cat([
+                -100 * torch.ones(segment.shape[0], 1, device=segment.device, dtype=segment.dtype),
+                segment,
+                -100 * torch.ones(segment.shape[0], self.num_mem_tokens, device=segment.device, dtype=segment.dtype)
+            ], dim=1) for segment in segments]
+        else:
+            augmented_segments = [torch.cat([
+                segment,
+                -100 * torch.ones(segment.shape[0], self.num_mem_tokens, device=segment.device, dtype=segment.dtype)
+            ], dim=1) for segment in segments]
+        augmented_segments = torch.cat(augmented_segments, dim=1)
+        augmented_labels = torch.cat([first, augmented_segments], dim=1)
+        return augmented_labels
+
+    def augment(self, input_ids, inputs_embeds, attention_mask, labels):
+        if input_ids is not None:
+            assert inputs_embeds is None, "input_ids and inputs_embeds cannot be provided together"
+            hidden_states = self.model.get_input_embeddings()(input_ids)
+        elif inputs_embeds is not None:
+            hidden_states = inputs_embeds
+        else:
+            raise ValueError("Either input_ids or inputs_embeds must be provided")
+        mem = self.memory.unsqueeze(0).expand(hidden_states.size(0), -1, -1)
+        sink = self.sink.unsqueeze(0).expand(hidden_states.size(0), -1, -1) if self.use_sink else None
+
+        augmented_hidden_states = self.augment_sequence(hidden_states, mem, sink)
+        augmented_attention_mask = self.augment_attention_mask(attention_mask)
+        augmented_labels = self.augment_labels(labels)
+        return augmented_hidden_states, augmented_attention_mask, augmented_labels
+
     def forward(
         self,
         input_ids=None,
@@ -690,6 +734,12 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
                 effective_labels = labels.masked_fill(~mask_bool, -100)
             else:
                 raise ValueError("labels_mask must be a torch.Tensor")
+
+        if attention_mask is None:
+            if input_ids is not None:
+                attention_mask = torch.ones(input_ids.shape[0], input_ids.shape[1], device=input_ids.device, dtype=input_ids.dtype)
+            else:
+                attention_mask = torch.ones(inputs_embeds.shape[0], inputs_embeds.shape[1], device=inputs_embeds.device, dtype=inputs_embeds.dtype)
         
         if self.vertical_mode:
             return self.forward_vertical(
@@ -744,36 +794,23 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             raise ValueError("Either input_ids or inputs_embeds must be provided")
         dtype = next(self.model.parameters()).dtype
 
+        augmented_hidden_states, augmented_attention_mask, augmented_labels = self.augment(input_ids, inputs_embeds, attention_mask, labels)
+
         # Helper to split tensors into segments
-        def split_tensor(tensor: torch.Tensor, segment_size: int, align: str):
-            if tensor is None:
-                return None
-            if align in {"left", None}:
-                split_inds = list(range(0, tensor.shape[1], segment_size)) + [tensor.shape[1]]
-                return [tensor[:, start:end] for (start, end) in zip(split_inds, split_inds[1:])]
-            elif align in {"right", None}:
-                split_inds = (list(range(tensor.shape[1], 0, -segment_size)) + [0])[::-1]
-                return [tensor[:, start:end] for (start, end) in zip(split_inds, split_inds[1:])]
-            elif align == "center":
-                import math as _math
-                n_seg = _math.ceil(tensor.shape[1] / segment_size)
-                return list(torch.chunk(tensor, n_seg, dim=1))
-            else:
-                raise ValueError("Unknown segment alignment: %s" % align)
+        def split_tensor(tensor: torch.Tensor, segment_size: int):
+            return torch.split(tensor, segment_size+self.num_mem_tokens+int(self.use_sink), dim=1)
 
         # Build segmented inputs
         # Split all provided tensors consistently
-        seg_input_ids = split_tensor(input_ids, self.segment_size, self.segment_alignment) if input_ids is not None else None
-        seg_inputs_embeds = split_tensor(inputs_embeds, self.segment_size, self.segment_alignment) if inputs_embeds is not None else None
-        seg_attention_mask = split_tensor(attention_mask, self.segment_size, self.segment_alignment) if attention_mask is not None else None
-        seg_labels = split_tensor(labels, self.segment_size, self.segment_alignment) if labels is not None else None
+        seg_inputs_embeds = split_tensor(augmented_hidden_states, self.segment_size)
+        seg_attention_mask = split_tensor(augmented_attention_mask, self.segment_size) if attention_mask is not None else None
+        seg_labels = split_tensor(augmented_labels, self.segment_size) if labels is not None else None
         # Assemble list of per-segment dicts
-        num_segments = len(seg_input_ids) if seg_input_ids is not None else len(seg_inputs_embeds) 
+        num_segments = len(seg_inputs_embeds) 
         segments = []
         for i in range(num_segments):
             segments.append({
-                "input_ids": None if seg_input_ids is None else seg_input_ids[i],
-                "inputs_embeds": None if seg_inputs_embeds is None else seg_inputs_embeds[i],
+                "inputs_embeds": seg_inputs_embeds[i],
                 "attention_mask": None if seg_attention_mask is None else seg_attention_mask[i],
                 "labels": None if seg_labels is None else seg_labels[i],
             })
@@ -789,7 +826,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         seg_outputs = []
         layers = self.get_layers()
         for seg in segments:
-            seg_len = seg["input_ids"].size(1) if seg.get("input_ids") is not None else seg["inputs_embeds"].size(1)
+            seg_len = seg["inputs_embeds"].size(1)
             if seg.get("attention_mask") is None:
                 base_2d = torch.ones(B, seg_len, device=device, dtype=dtype)
             else:
@@ -857,7 +894,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
                         print(f"[V-CACHE:posttrim] L0 K={tuple(k.shape) if k is not None else None} V={tuple(v.shape) if v is not None else None}")
                     except Exception:
                         pass
-                past_attn_mask = cur4d
+                past_attn_mask = cur4d[:, :, int(self.use_sink):-self.num_mem_tokens, int(self.use_sink):-self.num_mem_tokens]
             pos_offset += seg_len
 
         # Aggregate outputs across segments
@@ -865,7 +902,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         full_logits = torch.cat([o.logits for o in seg_outputs], dim=1) if len(seg_outputs) > 1 else seg_outputs[0].logits
 
         result = {}
-        result["logits"] = full_logits
+        result["logits"] = self.clean_sequence(full_logits)
 
         # Compute loss similar to outer wrapper
         if labels is not None:
@@ -918,17 +955,17 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         use_cache=None,
         past_key_values=None,
     ):
-
+        augmented_hidden_states, augmented_attention_mask, augmented_labels = self.augment(input_ids, inputs_embeds, attention_mask, labels)
         out = self.model(
-            input_ids=input_ids,
-            labels=labels,
-            inputs_embeds=inputs_embeds,
-            attention_mask=attention_mask,
+            labels=augmented_labels,
+            inputs_embeds=augmented_hidden_states,
+            attention_mask=augmented_attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             use_cache=use_cache,
             past_key_values=past_key_values,
         )
+        out.logits = self.clean_sequence(out.logits)
         self.zero_mem()
         return out
 
@@ -937,12 +974,14 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         Generate tokens using the inner-loop model with proper sliding window attention.
         This method should produce the same logits as the forward method for alignment.
         """
+
+        warnings.warn("Efficient generation is not implemented")
         if self.sliding_window:
-            # Temporarily use inefficient implementation, as efficient implementation is not working
-            return self._generate_sliding_window_inefficient(input_ids, attention_mask, **generate_kwargs)
+            return self._generate_inefficient(input_ids, attention_mask, **generate_kwargs)
         else:
             # return self._generate_standard(input_ids, attention_mask, **generate_kwargs) 
-            raise NotImplementedError("Non-sliding window generation is not implemented")
+            return self._generate_inefficient(input_ids, attention_mask, **generate_kwargs)
+            # raise NotImplementedError("Non-sliding window generation is not implemented")
     
     def _generate_standard(self, input_ids, attention_mask=None, **generate_kwargs):
         """Standard generation without sliding window."""
@@ -956,7 +995,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         else:
             return out.sequences
     
-    def _generate_sliding_window_inefficient(self, input_ids, attention_mask=None, **generate_kwargs):
+    def _generate_inefficient(self, input_ids, attention_mask=None, **generate_kwargs):
         """
         Generate tokens using sliding window attention that matches the forward method.
         This ensures alignment between generate and forward methods.
