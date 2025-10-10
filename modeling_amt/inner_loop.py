@@ -278,7 +278,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         associations = torch.einsum(einop, mk, mv, mb)
         W_mem = W_mem + associations
         if self.use_denom and z is not None:
-            z = z + (new_info_coef * mk).sum(dim=-2).detach()
+            z = z + (new_info_coef * mk).sum(dim=-2)
         return W_mem, z, False
 
     
