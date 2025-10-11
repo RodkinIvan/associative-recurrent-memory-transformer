@@ -23,7 +23,7 @@ MODEL_PATH=$MODEL_NAME
 ITERS=50000
 TBS=64
 # TBS=32
-BS=2
+BS=4
 
 LR=1e-5
 SEGMENT_SIZE=512
@@ -39,20 +39,18 @@ SCHEDULER=linear
 for N in 20
 do
 
-# cd accel_configs/
-# python create_config.py \
-#         --bf16 \
-#         --train_batch_size $TBS\
-#         --train_micro_batch_size_per_gpu $BS\
-#         --gradient_accumulation_steps $GRAD_ACC_STEPS\
-#         --np $NP\
-#         --gradient_clipping 1.0
-# cd ..
-# ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml # DEEPSPEED
-# DEEPSPEED_CONFIG=~/rmt/wip/accel_configs/exp/deepspeed/0s3_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0.json # DEEPSPEED
+cd accel_configs/
+python create_config.py \
+        --bf16 \
+        --train_batch_size $TBS\
+        --train_micro_batch_size_per_gpu $BS\
+        --gradient_accumulation_steps $GRAD_ACC_STEPS\
+        --np $NP\
+        --gradient_clipping 1.0
+cd ..
+ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml # DEEPSPEED
+DEEPSPEED_CONFIG=~/rmt/wip/accel_configs/exp/deepspeed/0s3_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0.json # DEEPSPEED
 
-
-ACCEL_CONFIG=./accel_configs/accelerate_bf16.yaml # MULTI_GPU
 
 # ACCEL_CONFIG=~/rmt/dev/accel_configs/accelerate_ds_bf16.yaml
 # DEEPSPEED_CONFIG=~/rmt/dev/accel_configs/deepspeed_bf16.json
@@ -95,8 +93,8 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --armt_impl inner \
         --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized \
         --prev_seg_kv \
-        --use_sink
-        # --deepspeed $DEEPSPEED_CONFIG
+        --use_sink \
+        --deepspeed $DEEPSPEED_CONFIG
         # --streaming
 done
 echo "done" 
