@@ -416,7 +416,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
 
             
             # Override with our computed fields
-            seg_kwargs["attention_mask"] = seg_mask
+            seg_kwargs["attention_mask"] = seg_mask.to(seg_aug.dtype)
             if seg_pos_ids is not None:
                 seg_kwargs["position_ids"] = seg_pos_ids
             seg_kwargs["use_cache"] = self.sliding_window
