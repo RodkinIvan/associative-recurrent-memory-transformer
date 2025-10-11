@@ -35,7 +35,7 @@ deepspeed_config = {
         "enabled": "auto"
     },
     "zero_optimization": {
-        "stage": 2
+        "stage": 3
     },
     "gradient_accumulation_steps": None,
     "gradient_clipping": 1.0,
@@ -75,7 +75,7 @@ accel_config_path = accel_config_path.format(args.train_batch_size,
                                             args.gradient_clipping, 
                                             args.np)
 
-deepspeed_config_path = f"{home}/rmt/wip/accel_configs/exp/deepspeed/0s2_" + precision + "tbs{}bs{}g{}c{}.json"
+deepspeed_config_path = f"{home}/rmt/wip/accel_configs/exp/deepspeed/0s3_" + precision + "tbs{}bs{}g{}c{}.json"
 deepspeed_config_path = deepspeed_config_path.format(args.train_batch_size,
                                                      args.train_micro_batch_size_per_gpu,
                                                      args.gradient_accumulation_steps,
