@@ -31,6 +31,8 @@ logger = logging.getLogger('')
 # if CUDA_VISIBLE_DEVICES is not set make all gpus visible
 if os.environ.get('CUDA_VISIBLE_DEVICES', None) is None:
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(i) for i in range(torch.cuda.device_count())])
+# if "LOCAL_RANK" in os.environ:
+#     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
 
 logger.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
 # first call to torch.cuda.device_count() sets visible gpus, following calls will not change the result
@@ -39,7 +41,7 @@ logger.info(f"CUDA DEVICE COUNT: {torch.cuda.device_count()}")
 from transformers import AutoConfig, AutoTokenizer, HfArgumentParser  # noqa: E402
 from peft import LoraConfig, TaskType, get_peft_model
 
-from lm_experiments_tools.utils import get_cls_by_name, get_optimizer, prepare_run  # noqa: E402
+from lm_experiments_tools.utils import get_cls_by_name
 
 
 parser = HfArgumentParser(TrainingArguments)
@@ -136,17 +138,39 @@ if __name__ == '__main__':
     args = parser.parse_args()
     # set current working dir
 
+    training_args_dict = {key: value for key, value in vars(args).items() if hasattr(TrainingArguments('.'), key)}
+
+    training_args_dict['remove_unused_columns'] = False
+    training_args_dict['save_safetensors'] = False
+    training_args_dict['bf16'] = True
+    training_args_dict['label_names'] = ['labels']
+    
+    # Debug: Add average_tokens_across_devices=False to see if this affects loss
+    # training_args_dict['average_tokens_across_devices'] = False
+
+    training_args_dict['eval_strategy'] = 'steps'
+    training_args_dict['per_device_eval_batch_size'] = training_args_dict.get('per_device_train_batch_size') # // 2
+    training_args_dict['eval_accumulation_steps'] = training_args_dict['gradient_accumulation_steps']
+    # print("="*20, training_args_dict['gradient_accumulation_steps'], "="*20)
+    if args.d_mem is None:
+        # for now, gradient checkpointing is not supported for ARMT
+        training_args_dict['gradient_checkpointing'] = True
+    else:
+        training_args_dict['gradient_checkpointing'] = False
+    
+    # training_args_dict['gradient_checkpointing_kwargs'] = {'use_reentrant':False}
+    # training_args_dict['log_level'] = 'debug'
+    training_args_dict['report_to'] = 'wandb'
+    training_args = TrainingArguments(**training_args_dict)
+
     if args.valid_tokenized_dataset is None:
         args.valid_tokenized_dataset = args.tokenized_dataset
     args.working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(args.working_dir)
     kwargs = InitProcessGroupKwargs(timeout=datetime.timedelta(1))
-    accelerator = accelerate.Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps, kwargs_handlers=[kwargs])
     from accelerate.logging import get_logger
     logger = get_logger('')
 
-    logger.info(f'num processes: {accelerator.num_processes}')
-    logger.info(f'mixed precision: {accelerator.mixed_precision}')
 
     if args.tokenizer:
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, trust_remote_code=True)
@@ -156,7 +180,7 @@ if __name__ == '__main__':
     # Prepare datasets
     logger.info(f'preparing dataset for {args.task_name}')
 
-    with accelerator.main_process_first():
+    with training_args.main_process_first(desc="dataset prep"):
         if args.tokenized_dataset is not None:
             dataset = datasets.load_from_disk(args.tokenized_dataset)
             validation_dataset = datasets.load_from_disk(args.valid_tokenized_dataset)
@@ -424,7 +448,10 @@ if __name__ == '__main__':
     else:
         train_dataset = dataset['train'].filter(filter_by_16k)
     
-    with accelerator.main_process_first():
+
+    
+
+    with training_args.main_process_first(desc="dataset prep"):
         n_cpus = max(os.cpu_count() - 1, 1)
         BATCH = 1024
         if args.tokenized_dataset is not None:
@@ -483,10 +510,10 @@ if __name__ == '__main__':
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
         model = model_cls.from_pretrained(args.from_pretrained, attn_implementation=args.attn_implementation,)
-    try:
-        model.parallelize()
-    except Exception as e:
-        logger.error(f'Error in parallelize: {e}')
+    # try:
+    #     model.parallelize()
+    # except Exception as e:
+    #     logger.error(f'Error in parallelize: {e}')
 
     if args.use_lora:
         peft_config = LoraConfig(
@@ -552,32 +579,21 @@ if __name__ == '__main__':
             logger.info(f'Loaded ARMT state dict from: {args.model_cpt}')
 
 
-    training_args_dict = {key: value for key, value in vars(args).items() if hasattr(TrainingArguments('.'), key)}
-
-    training_args_dict['remove_unused_columns'] = False
-    training_args_dict['save_safetensors'] = False
-    training_args_dict['bf16'] = True
-    training_args_dict['label_names'] = ['labels']
     
-    # Debug: Add average_tokens_across_devices=False to see if this affects loss
-    # training_args_dict['average_tokens_across_devices'] = False
-
-    training_args_dict['eval_strategy'] = 'steps'
-    training_args_dict['per_device_eval_batch_size'] = training_args_dict.get('per_device_train_batch_size') # // 2
-    training_args_dict['eval_accumulation_steps'] = training_args_dict['gradient_accumulation_steps']
-    # print("="*20, training_args_dict['gradient_accumulation_steps'], "="*20)
-    if args.d_mem is None:
-        # for now, gradient checkpointing is not supported for ARMT
-        training_args_dict['gradient_checkpointing'] = True
-    else:
-        training_args_dict['gradient_checkpointing'] = False
-    
-    # training_args_dict['gradient_checkpointing_kwargs'] = {'use_reentrant':False}
-    # training_args_dict['log_level'] = 'debug'
-    training_args_dict['report_to'] = 'wandb'
-    training_args = TrainingArguments(**training_args_dict)
     # args.gradient_checkpointing = True
+    print("="*20, training_args.deepspeed, "="*20)
+    # if args.deepspeed:
+    #     from accelerate.utils import DeepSpeedPlugin
+    #     from transformers.integrations.deepspeed import HfTrainerDeepSpeedConfig
 
+    #     hf_ds = HfTrainerDeepSpeedConfig(args.deepspeed)
+    #     hf_ds.trainer_config_process(training_args)
+    #     training_args.deepspeed_plugin = DeepSpeedPlugin(hf_ds_config=hf_ds)
+
+    training_args.bf16 = True
+    training_args.fp16 = False
+    training_args.ddp_find_unused_parameters = False
+    
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -587,8 +603,16 @@ if __name__ == '__main__':
         # compute_metrics=compute_metrics,
         data_collator=collate_fn,
     )
+
+
+    # if training_args.deepspeed:
+    #     trainer._setup_deepspeed()  # private but safe in HF; triggers DS engine build
+    #     print("is_deepspeed_enabled:", trainer.is_deepspeed_enabled)
+    #     print("wrapped type:", type(trainer.model_wrapped))
+    
+    # model, train_dataset, valid_dataset = trainer.accelerator.prepare(model, train_dataset, valid_dataset)
     print("Trainer Gradient Checkpointing Enabled:", trainer.args.gradient_checkpointing)
     
-    trainer.evaluate()
+    # trainer.evaluate()
     if not args.validate_only:
         trainer.train(resume_from_checkpoint=args.checkpoint) 
