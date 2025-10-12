@@ -475,10 +475,10 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                 return (merged,)
             elif len(layer_out) == 2:
                 warnings.warn(f"{YELLOW}Last attention was not tested for horizontal forward{RESET}")
-                return (merged, last_attn)
+                return (merged, None)
             elif len(layer_out) == 3:
                 warnings.warn(f"{YELLOW}Last attention and kv states were not tested for horizontal forward{RESET}")
-                return (merged, last_attn, present_kv)
+                return (merged, None, present_kv)
             else:
                 raise ValueError(f"Expected 1, 2 or 3 elements in layer output, got {len(layer_out)}")
         else:
@@ -579,9 +579,16 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         emb = self.model.get_input_embeddings()
         d_model = emb.embedding_dim
         memory_dim = getattr(self.model.config, "n_embd", getattr(self.model.config, "hidden_size", d_model))
-        memory_weights = torch.randn(
+        # Robust std in float32 with sane fallback
+        with torch.no_grad():
+            emb_std32 = emb.weight.detach().float().std()
+            if not torch.isfinite(emb_std32):
+                emb_std32 = torch.tensor(0.02, device=emb.weight.device)
+            emb_std32 = torch.clamp(emb_std32, min=1e-3, max=0.1)
+        memory_weights = torch.empty(
             (self.num_mem_tokens, memory_dim), device=emb.weight.device, dtype=emb.weight.dtype
-        ) * emb.weight.data.std()
+        )
+        torch.nn.init.normal_(memory_weights, mean=0.0, std=emb_std32.to(memory_weights.dtype))
         self.memory = nn.Parameter(memory_weights, requires_grad=True)
         if self.use_sink:
             self.sink = nn.Parameter(
@@ -725,7 +732,9 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         num_items_in_batch=None,
         use_cache=None,
         past_key_values=None,
-    ):
+    ):  
+        if labels_mask is not None:
+            assert labels_mask.any(), "labels_mask must not be all zeros"
         # Apply labels_mask by mapping masked positions to -100 (ignored by loss)
         effective_labels = labels
         if labels is not None and labels_mask is not None:

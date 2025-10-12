@@ -60,7 +60,9 @@ echo SAMPLE_SIZE $SAMPLE_SIZE MODEL_NAME $MODEL_NAME  LR $LR N $N
 echo gradient accumulation steps $GRAD_ACC_STEPS
 
 export WANDB_NAME=armt_${DATASET_NAME}
+# export NOT_INVERT_ATTN_MASK=1
 # python run_finetuning_lm_rmt.py \
+# export ARMT_DEBUG_NAN=1
 accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) --num_processes $NP --mixed_precision bf16 run_finetuning_lm_rmt_hf_armt.py \
         --task_name $DATASET_NAME \
         --valid_task_name $VALID_DATASET_NAME \
@@ -89,12 +91,13 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --layers_attr $LAYERS_ATTR \
         --valid_tokens tokens \
         --train_tokens tokens \
-        --attn_implementation eager \
+        --attn_implementation flash_attention_2 \
         --armt_impl inner \
         --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized \
         --prev_seg_kv \
         --use_sink \
-        --deepspeed $DEEPSPEED_CONFIG
+        --deepspeed $DEEPSPEED_CONFIG \
+        --max_grad_norm 1.0
         # --streaming
 done
-echo "done" 
+echo "done"
