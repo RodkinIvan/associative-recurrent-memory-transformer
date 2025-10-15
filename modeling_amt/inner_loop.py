@@ -11,6 +11,13 @@ from transformers import PreTrainedModel, PretrainedConfig
 from transformers.cache_utils import DynamicCache
 import warnings
 
+try:
+    from liger_kernel.transformers import apply_liger_kernel_to_llama
+    LIGER_KERNEL_AVAILABLE = True
+except ImportError:
+    print("*** Can't import liger_kernel ***")
+    LIGER_KERNEL_AVAILABLE = False
+
 # Reuse utilities from the existing implementation to ensure identical math
 from modeling_amt.language_modeling import DPFP, invert_attn_mask as _invert_attn_mask, attn_mask_to_4d
 
@@ -525,6 +532,13 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         base_model = None
         bm_cfg = getattr(config, "base_model_config", None)
         bm_name = getattr(config, "base_model_name", None)
+
+        if 'llama' not in bm_name:
+            LIGER_KERNEL_AVAILABLE = False
+            os.environ["ARMT_DISABLE_LIGER_KERNEL"] = "1"
+        if LIGER_KERNEL_AVAILABLE and not os.environ.get("ARMT_DISABLE_LIGER_KERNEL"):
+            apply_liger_kernel_to_llama()
+
         if bm_cfg is not None and bm_name is not None:
             raise ValueError("Exactly one of `base_model_name` or `base_model_config` must be provided in config.")
         if bm_cfg is not None:
@@ -791,6 +805,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         past_key_values=None,
         past_attn_mask=None,
     ):
+        assert not self.training or os.environ.get("ARMT_DISABLE_LIGER_KERNEL"), "Liger kernel is not supported for training in vertical mode, to disable liger kernel, set ARMT_DISABLE_LIGER_KERNEL=1"
         # Establish batch/seq info
         if input_ids is not None:
             assert inputs_embeds is None
@@ -950,6 +965,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
                 result["hidden_states"] = full_hidden_states
 
         return result
+    
     # ----- hf api -----
     def forward_horizontal(
         self,
@@ -974,7 +990,8 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             use_cache=use_cache,
             past_key_values=past_key_values,
         )
-        out.logits = self.clean_sequence(out.logits)
+        if not LIGER_KERNEL_AVAILABLE:
+            out.logits = self.clean_sequence(out.logits)
         self.zero_mem()
         return out
 
