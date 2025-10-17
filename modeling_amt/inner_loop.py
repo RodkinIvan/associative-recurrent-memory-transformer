@@ -17,6 +17,9 @@ try:
 except ImportError:
     print("*** Can't import liger_kernel ***")
     LIGER_KERNEL_AVAILABLE = False
+except Exception as e:
+    print("*** Can't import liger_kernel ***")
+    raise e
 
 # Reuse utilities from the existing implementation to ensure identical math
 from modeling_amt.language_modeling import DPFP, invert_attn_mask as _invert_attn_mask, attn_mask_to_4d
@@ -525,6 +528,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
     config_class = PretrainedConfig
 
     def __init__(self, config: PretrainedConfig, **kwargs):
+        global LIGER_KERNEL_AVAILABLE
         super().__init__(config, **kwargs)
         from transformers import AutoConfig, AutoModelForCausalLM
 
