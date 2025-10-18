@@ -566,29 +566,21 @@ if __name__ == '__main__':
         )
 
         # Create ARMT model (outer vs inner loop)
-        if args.armt_impl == 'inner':
-            model = InnerLoopARMTForCausalLM(config=armt_config)
-        else:
-            model = ARMTForCausalLM(config=armt_config)
-        logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
+        armt_model_cls = InnerLoopARMTForCausalLM if args.armt_impl == 'inner' else ARMTForCausalLM
 
         ## load cpt of ARMT
         if args.model_cpt and args.model_cpt != 'None':
-            cpt = torch.load(args.model_cpt, map_location='cpu')
-            model.load_state_dict(cpt, strict=False)
-            logger.info(f'Loaded ARMT state dict from: {args.model_cpt}')
+            logger.info(f'Loading ARMT checkpoint from: {args.model_cpt}')
+            model = armt_model_cls.from_pretrained(args.model_cpt, config=armt_config)
+            logger.info(f'Loaded HF-compatible ARMT model from checkpoint (impl={args.armt_impl})')
+        else:
+            model = armt_model_cls(config=armt_config)
+            logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
 
 
     
     # args.gradient_checkpointing = True
     print("="*20, training_args.deepspeed, "="*20)
-    # if args.deepspeed:
-    #     from accelerate.utils import DeepSpeedPlugin
-    #     from transformers.integrations.deepspeed import HfTrainerDeepSpeedConfig
-
-    #     hf_ds = HfTrainerDeepSpeedConfig(args.deepspeed)
-    #     hf_ds.trainer_config_process(training_args)
-    #     training_args.deepspeed_plugin = DeepSpeedPlugin(hf_ds_config=hf_ds)
 
     training_args.bf16 = True
     training_args.fp16 = False
