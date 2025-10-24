@@ -10,6 +10,7 @@ from torch.nn import CrossEntropyLoss
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.cache_utils import DynamicCache
 import warnings
+from modeling_amt.model import ARMTConfig
 
 try:
     from liger_kernel.transformers import apply_liger_kernel_to_llama
@@ -525,7 +526,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
     """
 
     # Reuse the config used by the outer-loop variant for parity
-    config_class = PretrainedConfig
+    config_class = ARMTConfig
 
     def __init__(self, config: PretrainedConfig, **kwargs):
         global LIGER_KERNEL_AVAILABLE
@@ -598,15 +599,16 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         d_model = emb.embedding_dim
         memory_dim = getattr(self.model.config, "n_embd", getattr(self.model.config, "hidden_size", d_model))
         # Robust std in float32 with sane fallback
-        with torch.no_grad():
-            emb_std32 = emb.weight.detach().float().std()
-            if not torch.isfinite(emb_std32):
-                emb_std32 = torch.tensor(0.02, device=emb.weight.device)
-            emb_std32 = torch.clamp(emb_std32, min=1e-3, max=0.1)
+        # with torch.no_grad():
+        #     emb_std32 = emb.weight.detach().float().std()
+        #     if not torch.isfinite(emb_std32):
+        #         emb_std32 = torch.tensor(0.02, device=emb.weight.device)
+        #     emb_std32 = torch.clamp(emb_std32, min=1e-3, max=0.1)
         memory_weights = torch.empty(
             (self.num_mem_tokens, memory_dim), device=emb.weight.device, dtype=emb.weight.dtype
         )
-        torch.nn.init.normal_(memory_weights, mean=0.0, std=emb_std32.to(memory_weights.dtype))
+        # torch.nn.init.normal_(memory_weights, mean=0.0, std=emb_std32.to(memory_weights.dtype))
+        torch.nn.init.normal_(memory_weights, mean=0.0, std=0.02)
         self.memory = nn.Parameter(memory_weights, requires_grad=True)
         if self.use_sink:
             self.sink = nn.Parameter(
