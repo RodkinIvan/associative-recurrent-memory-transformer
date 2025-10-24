@@ -9,7 +9,7 @@ import datasets
 from torch.utils.data import DataLoader
 import datetime
 from itertools import chain
-from transformers import Trainer, TrainingArguments
+from transformers import Trainer, TrainingArguments, TrainerCallback
 from torch.nn.utils.rnn import pad_sequence
 from datasets.distributed import split_dataset_by_node
 
@@ -19,6 +19,7 @@ from peft import get_peft_model, LoraConfig, TaskType
 from transformers import modeling_utils
 from torch.utils.data import IterableDataset
 import heapq
+from tqdm import tqdm
 
 if not hasattr(modeling_utils, "ALL_PARALLEL_STYLES") or modeling_utils.ALL_PARALLEL_STYLES is None:
     modeling_utils.ALL_PARALLEL_STYLES = ["tp", "none","colwise",'rowwise']
@@ -26,6 +27,9 @@ if not hasattr(modeling_utils, "ALL_PARALLEL_STYLES") or modeling_utils.ALL_PARA
 logger_fmt = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(format=logger_fmt, level=logging.INFO)
 logger = logging.getLogger('')
+
+# Suppress verbose torch.distributed warnings
+logging.getLogger('torch.distributed.distributed_c10d').setLevel(logging.ERROR)
 
 
 # if CUDA_VISIBLE_DEVICES is not set make all gpus visible
@@ -190,8 +194,31 @@ if __name__ == '__main__':
         else:
             # Load dataset with streaming=True to load samples on the fly
             train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=args.streaming, trust_remote_code=True)
-            validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation', trust_remote_code=True)
-            test_dataset = datasets.load_dataset(args.valid_task_name, split='test', trust_remote_code=True)
+            if args.valid_task_name is not None:
+                validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation', trust_remote_code=True)
+                test_dataset = datasets.load_dataset(args.valid_task_name, split='test', trust_remote_code=True)
+            else:
+                # Take the first 1000 samples from train dataset for validation and test
+                if args.streaming:
+                    # For streaming datasets, use take() and skip()
+                    validation_dataset = train_dataset.take(1000)
+                    test_dataset = train_dataset.skip(1000).take(1000)
+                    train_dataset = train_dataset.skip(2000)
+                else:
+                    # For regular datasets, create random train/val/test split
+                    logger.info("Creating random train/validation/test split from train dataset")
+                    
+                    # First split: separate out 2000 samples for val+test
+                    split_data = train_dataset.train_test_split(test_size=2000, seed=args.seed)
+                    train_dataset = split_data['train']
+                    val_test_dataset = split_data['test']
+                    
+                    # Second split: divide val+test into validation and test
+                    val_test_split = val_test_dataset.train_test_split(test_size=0.5, seed=args.seed)
+                    validation_dataset = val_test_split['train']
+                    test_dataset = val_test_split['test']
+                    
+                    logger.info(f"Split sizes - Train: {len(train_dataset)}, Val: {len(validation_dataset)}, Test: {len(test_dataset)}")
             logger.info("Dataset loaded")
             # Create a function to tokenize on the fly
             
@@ -211,22 +238,22 @@ if __name__ == '__main__':
                 tokenize_function,
                 batched=False,
                 remove_columns=['text'],
-                desc="Tokenizing eval split",
-                num_proc=1,
+                # desc="Tokenizing eval split",
+                # num_proc=1,
             )
             test_dataset = test_dataset.map(
                 tokenize_function,
                 batched=False,
                 remove_columns=['text'],
-                desc="Tokenizing test split",
-                num_proc=1,
+                # desc="Tokenizing test split",
+                # num_proc=1,
             )
             
             # Create a DatasetDict with the processed splits
-            nodes = torch.cuda.device_count()
-            train_dataset = split_dataset_by_node(train_dataset, world_size=nodes, rank=0)
-            validation_dataset = split_dataset_by_node(validation_dataset, world_size=nodes, rank=0)
-            test_dataset = split_dataset_by_node(test_dataset, world_size=nodes, rank=0)
+            # nodes = torch.cuda.device_count()
+            # train_dataset = split_dataset_by_node(train_dataset, world_size=nodes, rank=0)
+            # validation_dataset = split_dataset_by_node(validation_dataset, world_size=nodes, rank=0)
+            # test_dataset = split_dataset_by_node(test_dataset, world_size=nodes, rank=0)
 
             dataset = datasets.DatasetDict({
                 'train': train_dataset.with_format("torch"),
@@ -297,15 +324,32 @@ if __name__ == '__main__':
             self.block   = segment_size + history_size
             self.B       = chunk_tokens // segment_size
             self.seed    = seed
+            self.stats   = {
+                'raw_samples_consumed': 0,
+                'total_tokens_consumed': 0,
+                'windows_yielded': 0
+            }
 
         def __iter__(self):
             rng  = random.Random(self.seed)
             buf  = []          # holds ≤ B windows
             tail = []          # rolling token tail for windowing
-
+            bar = tqdm(total=self.B, desc="Filling buffer")
+            
             for sample in self.raw_ds:
-                tail.extend(sample[args.train_tokens])
-
+                sample_tokens = sample[args.train_tokens]
+                tail.extend(sample_tokens)
+                
+                # Track statistics
+                self.stats['raw_samples_consumed'] += 1
+                self.stats['total_tokens_consumed'] += len(sample_tokens)
+                
+                # Log every 1000 samples
+                if self.stats['raw_samples_consumed'] % 1000 == 0:
+                    logger.info(f"[Dataset Stats] Consumed {self.stats['raw_samples_consumed']:,} raw samples, "
+                              f"{self.stats['total_tokens_consumed']:,} tokens, "
+                              f"yielded {self.stats['windows_yielded']:,} windows")
+                
                 # emit as many full windows as we can
                 while len(tail) >= self.block:
                     win  = tail[: self.block]
@@ -314,16 +358,27 @@ if __name__ == '__main__':
                     # ───── Fisher–Yates with fixed buffer ─────
                     if len(buf) < self.B:
                         buf.append(win)              # just fill
+                        bar.update(1)                # update progress bar
+                        if len(buf) == self.B:
+                            bar.set_description("Buffer is full")
+                            bar.close()
                     else:
                         j = rng.randrange(self.B)    # 0 … B-1
                         yield {args.train_tokens: buf[j]}  # emit old window
-                        buf[j] = win                 # insert new one
+                        self.stats['windows_yielded'] += 1
+                        buf[j] = win
+                                      # insert new one
                     # -------------------------------------------
 
-            # Stream finished → flush remaining buffer
             rng.shuffle(buf)
             for w in buf:
                 yield {args.train_tokens: w}
+                self.stats['windows_yielded'] += 1
+            
+            # Final stats
+            logger.info(f"[Dataset Final Stats] Total consumed: {self.stats['raw_samples_consumed']:,} samples, "
+                      f"{self.stats['total_tokens_consumed']:,} tokens, "
+                      f"yielded {self.stats['windows_yielded']:,} windows")
 
     class HashedWindowStream(IterableDataset):
         """
@@ -454,21 +509,22 @@ if __name__ == '__main__':
     with training_args.main_process_first(desc="dataset prep"):
         n_cpus = max(os.cpu_count() - 1, 1)
         BATCH = 1024
-        if args.tokenized_dataset is not None:
+        if not args.streaming:
             
             train_dataset = train_dataset.select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, history_size,),
                                                             batched=True, batch_size=BATCH)
             # BUFFER = 1024
-            # train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+            train_dataset = train_dataset.shuffle(seed=args.seed)
         else:
             # Estimate number of tokens to consume per epoch and derive number of windows
             tokens_per_chunk = 50_000_000  # adjust this estimate as needed
+            # tokens_per_chunk = 1_000_000
             # Use a buffer at least as large as the number of windows for effective shuffling
-            BUFFER = 2048
-            if args.streaming:
-                train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
-            else:
-                train_dataset = train_dataset.shuffle(seed=args.seed)
+            # BUFFER = 2048
+            # if args.streaming:
+            #     train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
+            # else:
+            #     train_dataset = train_dataset.shuffle(seed=args.seed)
             # Wrap the raw stream in windowed iterable and shuffle windows
             # length = 5_451_448
             # train_dataset = ChunkedWindowStream(train_dataset, segment_size, history_size, tokens_per_chunk, length, args.seed)
@@ -479,25 +535,58 @@ if __name__ == '__main__':
                 chunk_tokens=tokens_per_chunk, 
                 seed=args.seed
             )
-            # train_dataset = OnlineWindowStream(
-            #     raw_ds=train_dataset, 
-            #     segment_size=segment_size, 
-            #     history_size=history_size, 
-            #     chunk_tokens=tokens_per_chunk, 
-            #     seed=args.seed
-            # )
-            # train_dataset = train_dataset.select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, history_size,), batched=True, batch_size=BATCH)
-        valid_dataset = validation_dataset["validation"].select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, val_history_size ), 
-                                                             batched=True, batch_size=BATCH, desc=f"Grouping valid in chunks of {segment_size} and history {val_history_size}", num_proc=n_cpus)
-        test_dataset = validation_dataset["test"].select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, val_history_size), 
-                                                             batched=True, batch_size=BATCH, desc=f"Grouping test in chunks of {segment_size} and history {val_history_size}", num_proc=n_cpus)
+        valid_dataset = validation_dataset["validation"].select_columns([args.train_tokens]).map(
+            lambda x: group_texts(x, segment_size, val_history_size ), 
+            batched=True, 
+            # batch_size=BATCH, 
+            # desc=f"Grouping valid in chunks of {segment_size} and history {val_history_size}", 
+            # num_proc=n_cpus
+        )
+        test_dataset = validation_dataset["test"].select_columns([args.train_tokens]).map(
+            lambda x: group_texts(x, segment_size, val_history_size), 
+            batched=True, 
+            # batch_size=BATCH, 
+            # desc=f"Grouping test in chunks of {segment_size} and history {val_history_size}", 
+            # num_proc=n_cpus
+        )
 
     
-    num_valid_examples = 300
-    valid_inds = np.linspace(1, len(valid_dataset)-1, num_valid_examples).astype(int).tolist()
-    valid_dataset = valid_dataset.select(valid_inds)
+    num_valid_examples = 1000
+    if args.streaming or isinstance(valid_dataset, IterableDataset):
+        # For streaming/iterable datasets, just take the first N examples
+        valid_dataset = valid_dataset.take(num_valid_examples)
+    else:
+        # For regular datasets, sample evenly across the dataset
+        valid_inds = np.linspace(1, len(valid_dataset)-1, num_valid_examples).astype(int).tolist()
+        valid_dataset = valid_dataset.select(valid_inds)
 
     kwargs = {'pin_memory': True, 'num_workers': args.data_n_workers}
+
+    # Log expected training statistics
+    logger.info("="*80)
+    logger.info("TRAINING DATASET STATISTICS")
+    logger.info("="*80)
+    logger.info(f"Dataset: {args.task_name}")
+    logger.info(f"Segment size: {segment_size}")
+    logger.info(f"History size: {history_size}")
+    logger.info(f"Window size: {segment_size + history_size}")
+    logger.info(f"Batch size per device: {training_args.per_device_train_batch_size}")
+    logger.info(f"Gradient accumulation steps: {training_args.gradient_accumulation_steps}")
+    logger.info(f"Number of devices: {training_args.world_size if hasattr(training_args, 'world_size') else 'unknown'}")
+    logger.info(f"Effective batch size: {training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps * (training_args.world_size if hasattr(training_args, 'world_size') else 1)}")
+    logger.info(f"Max training steps: {training_args.max_steps}")
+    
+    # Calculate expected tokens
+    expected_windows = training_args.max_steps * training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps * (training_args.world_size if hasattr(training_args, 'world_size') else 1)
+    expected_tokens = expected_windows * segment_size  # Each window processes segment_size new tokens
+    logger.info(f"Expected windows to process: {expected_windows:,}")
+    logger.info(f"Expected tokens to process: {expected_tokens:,} ({expected_tokens/1e9:.2f}B)")
+    
+    # FineWeb-Edu info
+    if 'fineweb' in args.task_name.lower():
+        logger.info(f"NOTE: FineWeb-Edu contains ~1.3 trillion tokens across ~billions of documents")
+        logger.info(f"      You will process approximately {100 * expected_tokens / 1.3e12:.4f}% of the full dataset")
+    logger.info("="*80)
 
     # define model
     model_cls = get_cls_by_name(args.model_cls)
@@ -586,6 +675,31 @@ if __name__ == '__main__':
     training_args.fp16 = False
     training_args.ddp_find_unused_parameters = False
     
+    # Custom callback to log dataset consumption statistics
+    class DatasetStatsCallback(TrainerCallback):
+        def __init__(self, train_dataset, expected_tokens):
+            self.train_dataset = train_dataset
+            self.expected_tokens = expected_tokens
+            
+        def on_train_end(self, args, state, control, **kwargs):
+            if hasattr(self.train_dataset, 'stats'):
+                stats = self.train_dataset.stats
+                logger.info("="*80)
+                logger.info("ACTUAL TRAINING DATASET CONSUMPTION")
+                logger.info("="*80)
+                logger.info(f"Raw samples consumed: {stats['raw_samples_consumed']:,}")
+                logger.info(f"Total tokens consumed: {stats['total_tokens_consumed']:,} ({stats['total_tokens_consumed']/1e9:.2f}B)")
+                logger.info(f"Windows yielded: {stats['windows_yielded']:,}")
+                logger.info(f"Expected tokens: {self.expected_tokens:,} ({self.expected_tokens/1e9:.2f}B)")
+                logger.info(f"Actual vs Expected: {100 * stats['total_tokens_consumed'] / self.expected_tokens:.2f}%")
+                
+                if 'fineweb' in args.task_name.lower() if hasattr(args, 'task_name') else False:
+                    logger.info(f"Fraction of FineWeb-Edu (1.3T tokens): {100 * stats['total_tokens_consumed'] / 1.3e12:.4f}%")
+                logger.info("="*80)
+    
+    # Create callback with expected tokens
+    dataset_stats_callback = DatasetStatsCallback(train_dataset, expected_tokens)
+    
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -594,6 +708,7 @@ if __name__ == '__main__':
         # test_dataset=test_dataset,
         # compute_metrics=compute_metrics,
         data_collator=collate_fn,
+        callbacks=[dataset_stats_callback],
     )
 
 
