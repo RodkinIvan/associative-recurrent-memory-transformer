@@ -167,6 +167,11 @@ if __name__ == '__main__':
     # training_args_dict['gradient_checkpointing_kwargs'] = {'use_reentrant':False}
     # training_args_dict['log_level'] = 'debug'
     training_args_dict['report_to'] = 'wandb'
+    # Push checkpoints to Hugging Face Hub every 1000 steps
+    training_args_dict['save_strategy'] = 'steps'
+    training_args_dict['save_steps'] = 1000
+    training_args_dict['push_to_hub'] = True
+    training_args_dict['hub_strategy'] = 'every_save'
     training_args = TrainingArguments(**training_args_dict)
 
     if args.valid_tokenized_dataset is None:
