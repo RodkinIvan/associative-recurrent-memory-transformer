@@ -9,10 +9,10 @@ docker build -t armt-pretrain -f Dockerfile .
 Run with all GPUs and mount output/token cache dirs:
 
 ```bash
-docker run --gpus all --shm-size=16g \
+docker run -dit --gpus all --shm-size=16g \
   -e WANDB_API_KEY=... \
   -e HF_TOKEN=... \
-  -it armt-pretrain bash docker/run_pipeline.sh
+  armt-pretrain bash docker/run_pipeline.sh
 ```
 
 Notes:
