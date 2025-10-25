@@ -63,8 +63,8 @@ python create_config.py \
         --np $NP\
         --gradient_clipping 1.0
 cd ..
-ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml
-# ACCEL_CONFIG=./accel_configs/deepspeed.yaml
+ACCEL_CONFIG=$(pwd)/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml
+# ACCEL_CONFIG=$(pwd)/accel_configs/deepspeed.yaml
 
 
 # SEGMENT_SIZE=$SAMPLE_SIZE

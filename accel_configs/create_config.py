@@ -4,7 +4,8 @@ import json
 import argparse
 from pathlib import Path
 
-home = Path.home()
+# Resolve repository root (this file lives in repo_root/accel_configs)
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 accel_config = {
 'compute_environment': 'LOCAL_MACHINE',
@@ -65,24 +66,28 @@ elif args.fp16:
 else:
     precision = ""
 
-os.makedirs(f"{home}/rmt/wip/accel_configs/exp/accelerate", exist_ok=True)
-os.makedirs(f"{home}/rmt/wip/accel_configs/exp/deepspeed", exist_ok=True)
+accel_dir = REPO_ROOT / "accel_configs" / "exp" / "accelerate"
+ds_dir = REPO_ROOT / "accel_configs" / "exp" / "deepspeed"
+accel_dir.mkdir(parents=True, exist_ok=True)
+ds_dir.mkdir(parents=True, exist_ok=True)
 
-accel_config_path = f"{home}/rmt/wip/accel_configs/exp/accelerate/deepspeed_" + precision + "tbs{}bs{}g{}c{}np{}.yaml"
-accel_config_path = accel_config_path.format(args.train_batch_size,
-                                            args.train_micro_batch_size_per_gpu,
-                                            args.gradient_accumulation_steps,
-                                            args.gradient_clipping, 
-                                            args.np)
+accel_config_path = accel_dir / ("deepspeed_" + precision + "tbs{}bs{}g{}c{}np{}.yaml").format(
+    args.train_batch_size,
+    args.train_micro_batch_size_per_gpu,
+    args.gradient_accumulation_steps,
+    args.gradient_clipping,
+    args.np,
+)
 
-deepspeed_config_path = f"{home}/rmt/wip/accel_configs/exp/deepspeed/0s3_" + precision + "tbs{}bs{}g{}c{}.json"
-deepspeed_config_path = deepspeed_config_path.format(args.train_batch_size,
-                                                     args.train_micro_batch_size_per_gpu,
-                                                     args.gradient_accumulation_steps,
-                                                     args.gradient_clipping)
+deepspeed_config_path = ds_dir / ("0s3_" + precision + "tbs{}bs{}g{}c{}.json").format(
+    args.train_batch_size,
+    args.train_micro_batch_size_per_gpu,
+    args.gradient_accumulation_steps,
+    args.gradient_clipping,
+)
 
 accel_config['num_processes'] = int(args.np)
-accel_config['deepspeed_config']['deepspeed_config_file'] = deepspeed_config_path
+accel_config['deepspeed_config']['deepspeed_config_file'] = str(deepspeed_config_path)
 
 deepspeed_config['fp16']['enabled'] = bool(args.fp16)
 deepspeed_config['bf16']['enabled'] = bool(args.bf16)

@@ -68,8 +68,8 @@ python create_config.py \
         --np $NP\
         --gradient_clipping 1.0
 cd ..
-ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml
-# ACCEL_CONFIG=./accel_configs/deepspeed.yaml
+ACCEL_CONFIG=$(pwd)/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml
+# ACCEL_CONFIG=$(pwd)/accel_configs/deepspeed.yaml
 
 MODEL_CPT=/home/XXXX.XXXX/runs/babilong/qa1_single-supporting-fact/rwkv_armt//home/XXXX.XXXX/lab/rwkv-x060-173m-pile-20240515-ctx4k.pth/lr1e-04_linear_adamw_wd1e-02_32x512_mem10_bs64_bptt--1/run_2
 
