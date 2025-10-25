@@ -1,3 +1,14 @@
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,GRAPH,COLL
+export NCCL_ASYNC_ERROR_HANDLING=1
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+
+# Flight recorder for stack traces PyTorch mentions
+export TORCH_NCCL_TRACE_BUFFER_SIZE=1048576   # 1MB per rank is fine to start
+
+# Write per-rank logs (optional but helpful)
+export NCCL_DEBUG_FILE=/tmp/nccl_rank_%r.log
+
 export CUDA_VISIBLE_DEVICES=0,1
 export TORCH_NCCL_BLOCKING_WAIT=0
 export WANDB_PROJECT=llm_pretrain
@@ -13,8 +24,9 @@ BACKBONE_CLS=transformers:AutoModelForCausalLM
 
 
 # DATASET_NAME=BramVanroy/CommonCrawl-CreativeCommons
-DATASET_NAME=deepmind/pg19
-VALID_DATASET_NAME=deepmind/pg19
+# DATASET_NAME=deepmind/pg19
+DATASET_NAME=karpathy/fineweb-edu-100b-shuffle
+# VALID_DATASET_NAME=deepmind/pg19
 
 MODEL_NAME=meta-llama/Llama-3.2-1B
 MODEL_PATH=$MODEL_NAME
@@ -23,11 +35,11 @@ MODEL_PATH=$MODEL_NAME
 ITERS=50000
 TBS=64
 # TBS=32
-BS=4
+BS=1
 
 LR=1e-5
-SEGMENT_SIZE=512
-MAX_N_SEGMENTS=2
+SEGMENT_SIZE=1024
+MAX_N_SEGMENTS=8
 MEMORY_SIZE=32
 D_MEM=64
 LAYERS_ATTR=model.layers
@@ -65,7 +77,6 @@ export WANDB_NAME=armt_${DATASET_NAME}
 # export ARMT_DEBUG_NAN=1
 accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) --num_processes $NP --mixed_precision bf16 run_finetuning_lm_rmt_hf_armt.py \
         --task_name $DATASET_NAME \
-        --valid_task_name $VALID_DATASET_NAME \
         --output_dir ../runs/${DATASET_NAME}/$MODEL_NAME/${SCHEDULER}_adamw_wd1e-03_${MAX_N_SEGMENTS}x${SEGMENT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_hf_armt_dmem${D_MEM}/run_$N \
         --from_pretrained $MODEL_PATH \
         --model_type $MODEL_TYPE \
@@ -92,12 +103,12 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --valid_tokens tokens \
         --train_tokens tokens \
         --attn_implementation flash_attention_2 \
-        --armt_impl inner \
-        --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized \
+        --armt_impl inner  \
         --prev_seg_kv \
         --use_sink \
         --deepspeed $DEEPSPEED_CONFIG \
-        --max_grad_norm 1.0
-        # --streaming
+        --max_grad_norm 1.0 \
+        --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/fineweb_edu_100b_tokenized
+        # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
 done
 echo "done"

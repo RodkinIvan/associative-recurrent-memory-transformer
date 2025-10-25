@@ -20,6 +20,7 @@ from transformers import modeling_utils
 from torch.utils.data import IterableDataset
 import heapq
 from tqdm import tqdm
+import gc
 
 if not hasattr(modeling_utils, "ALL_PARALLEL_STYLES") or modeling_utils.ALL_PARALLEL_STYLES is None:
     modeling_utils.ALL_PARALLEL_STYLES = ["tp", "none","colwise",'rowwise']
@@ -184,14 +185,84 @@ if __name__ == '__main__':
     # Prepare datasets
     logger.info(f'preparing dataset for {args.task_name}')
 
+    # Helper function to check if dataset directory contains chunks
+    def is_chunked_dataset(dataset_path):
+        """Check if dataset directory contains chunk subdirectories"""
+        dataset_dir = Path(dataset_path)
+        if not dataset_dir.exists():
+            return False
+        chunk_dirs = [d for d in dataset_dir.iterdir() if d.is_dir() and d.name.startswith('chunk_')]
+        return len(chunk_dirs) > 0
+
     with training_args.main_process_first(desc="dataset prep"):
         if args.tokenized_dataset is not None:
-            dataset = datasets.load_from_disk(args.tokenized_dataset)
-            validation_dataset = datasets.load_from_disk(args.valid_tokenized_dataset)
+            # Check if this is a chunked dataset
+            is_chunked = is_chunked_dataset(args.tokenized_dataset)
+            
+            if is_chunked:
+                logger.info(f"Detected chunked dataset format in {args.tokenized_dataset}")
+                
+                # If no separate validation dataset provided, extract from first chunk
+                if args.valid_tokenized_dataset == args.tokenized_dataset:
+                    logger.info("No separate validation dataset provided - will extract from first chunk")
+                    
+                    # Load first chunk to extract validation/test
+                    first_chunk_dir = sorted([
+                        d for d in Path(args.tokenized_dataset).iterdir() 
+                        if d.is_dir() and d.name.startswith('chunk_')
+                    ])[0]
+                    
+                    logger.info(f"Loading first chunk {first_chunk_dir.name} to extract validation/test sets...")
+                    first_chunk = datasets.load_from_disk(str(first_chunk_dir))
+                    logger.info(f"First chunk loaded: {len(first_chunk)} samples")
+                    
+                    # Take first 2000 samples for val/test
+                    val_test_samples = min(2000, len(first_chunk) // 10)  # At most 2000 or 10% of chunk
+                    logger.info(f"Extracting first {val_test_samples} samples for validation/test")
+                    
+                    val_test_data = first_chunk.select(range(val_test_samples))
+                    
+                    # Split into validation and test
+                    val_size = val_test_samples // 2
+                    validation_data = val_test_data.select(range(val_size))
+                    test_data = val_test_data.select(range(val_size, val_test_samples))
+                    
+                    logger.info(f"Created validation set: {len(validation_data)} samples, test set: {len(test_data)} samples")
+                    
+                    # Create validation dataset dict
+                    validation_dataset = datasets.DatasetDict({
+                        'validation': validation_data,
+                        'test': test_data
+                    })
+                    
+                    # Store the number of samples to skip from first chunk during training
+                    chunked_skip_samples = val_test_samples
+                    
+                    # Clean up
+                    del first_chunk
+                    del val_test_data
+                    gc.collect()
+                else:
+                    # Use provided validation dataset
+                    logger.info(f"Using provided validation dataset from {args.valid_tokenized_dataset}")
+                    validation_dataset = datasets.load_from_disk(args.valid_tokenized_dataset)
+                    chunked_skip_samples = 0
+                
+                # For chunked datasets, we'll create a special placeholder
+                dataset = {'train': 'chunked'}  # Placeholder to indicate chunked format
+            else:
+                logger.info(f"Loading regular tokenized dataset from {args.tokenized_dataset}")
+                dataset = datasets.load_from_disk(args.tokenized_dataset)
+                validation_dataset = datasets.load_from_disk(args.valid_tokenized_dataset)
+                chunked_skip_samples = 0  # Not used for non-chunked datasets
+            
             logger.info("Tokenized Dataset loaded")
-            if args.valid_tokens != args.train_tokens:
+            if not is_chunked and args.valid_tokens != args.train_tokens:
                 validation_dataset = validation_dataset.rename_column(args.valid_tokens, args.train_tokens)
         else:
+            # Not using tokenized dataset - streaming or on-the-fly tokenization
+            chunked_skip_samples = 0  # Not applicable for non-tokenized datasets
+            
             # Load dataset with streaming=True to load samples on the fly
             train_dataset = datasets.load_dataset(args.task_name, split='train', streaming=args.streaming, trust_remote_code=True)
             if args.valid_task_name is not None:
@@ -272,6 +343,72 @@ if __name__ == '__main__':
     else:
         val_history_size = history_size
 
+    class ChunkedDatasetIterator(IterableDataset):
+        """
+        Loads chunked datasets (chunk_000000, chunk_000001, ...) sequentially.
+        Each chunk is processed with group_texts just like a normal dataset.
+        """
+        def __init__(self, dataset_dir, segment_size, history_size, token_column='tokens', seed=42, 
+                     skip_first_n_samples=0):
+            self.dataset_dir = Path(dataset_dir)
+            self.seg = segment_size
+            self.hist = history_size
+            self.token_column = token_column
+            self.seed = seed
+            self.skip_first_n_samples = skip_first_n_samples  # For excluding val/test from first chunk
+            
+            # Find all chunk directories
+            self.chunk_dirs = sorted([
+                d for d in self.dataset_dir.iterdir() 
+                if d.is_dir() and d.name.startswith('chunk_')
+            ])
+            
+            if not self.chunk_dirs:
+                raise ValueError(f"No chunks found in {dataset_dir}. Expected directories like 'chunk_000000', 'chunk_000001', etc.")
+            
+            logger.info(f"Found {len(self.chunk_dirs)} chunks in {dataset_dir}")
+            logger.info(f"Chunks will be loaded and processed sequentially: {self.chunk_dirs[0].name} ... {self.chunk_dirs[-1].name}")
+            if self.skip_first_n_samples > 0:
+                logger.info(f"NOTE: First {self.skip_first_n_samples} samples from chunk_000000 will be skipped (reserved for validation/test)")
+        
+        def __iter__(self):
+            """Iterate through all chunks, loading and processing one at a time"""
+            for chunk_idx, chunk_dir in enumerate(self.chunk_dirs):
+                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Loading {chunk_dir.name}...")
+                
+                # Load this chunk
+                chunk_dataset = datasets.load_from_disk(str(chunk_dir))
+                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Loaded {len(chunk_dataset)} samples from {chunk_dir.name}")
+                
+                # Skip validation/test samples from the first chunk
+                if chunk_idx == 0 and self.skip_first_n_samples > 0:
+                    original_size = len(chunk_dataset)
+                    chunk_dataset = chunk_dataset.select(range(self.skip_first_n_samples, len(chunk_dataset)))
+                    logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Skipped first {self.skip_first_n_samples} samples (val/test), using {len(chunk_dataset)}/{original_size} samples")
+                
+                # Process chunk with group_texts (same as normal pipeline)
+                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Processing with group_texts (segment_size={self.seg}, history_size={self.hist})...")
+                
+                processed = chunk_dataset.select_columns([self.token_column]).map(
+                    lambda x: group_texts(x, self.seg, self.hist),
+                    batched=True,
+                    batch_size=1024
+                )
+                
+                # Shuffle the processed chunk
+                processed = processed.shuffle(seed=self.seed + chunk_idx)
+                
+                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Processed into {len(processed)} windows, yielding...")
+                
+                # Yield all samples from this processed chunk
+                for sample in processed:
+                    yield sample
+                
+                # Explicitly delete the chunk datasets and run garbage collection
+                del chunk_dataset
+                del processed
+                gc.collect()
+                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Completed and unloaded {chunk_dir.name}")
 
     class ChunkedWindowStream(IterableDataset):
         def __init__(self, raw_ds, segment_size, history_size, chunk_tokens, dataset_length, seed=0):
@@ -498,10 +635,21 @@ if __name__ == '__main__':
     def filter_by_16k(sample):
         return len(sample[args.train_tokens]) > 16000
     
-    if args.min_sample_len not in {16000, None}:
-        train_dataset = dataset['train'].filter(lambda sample: filter_by_len(sample, args.min_sample_len))
+    # Check if we're using a chunked dataset
+    is_chunked_train = (args.tokenized_dataset is not None and 
+                        is_chunked_dataset(args.tokenized_dataset))
+    
+    if is_chunked_train:
+        # For chunked datasets, skip filtering and use ChunkedDatasetIterator
+        logger.info("Using chunked dataset - will load and process chunks sequentially")
+        # Note: We'll create the ChunkedDatasetIterator below in the dataset prep section
+        train_dataset = None  # Placeholder
     else:
-        train_dataset = dataset['train'].filter(filter_by_16k)
+        # Normal filtering for non-chunked datasets
+        if args.min_sample_len not in {16000, None}:
+            train_dataset = dataset['train'].filter(lambda sample: filter_by_len(sample, args.min_sample_len))
+        else:
+            train_dataset = dataset['train'].filter(filter_by_16k)
     
 
     
@@ -509,8 +657,21 @@ if __name__ == '__main__':
     with training_args.main_process_first(desc="dataset prep"):
         n_cpus = max(os.cpu_count() - 1, 1)
         BATCH = 1024
-        if not args.streaming:
-            
+        
+        if is_chunked_train:
+            # Create ChunkedDatasetIterator which handles loading, processing, and yielding
+            logger.info(f"Creating ChunkedDatasetIterator for {args.tokenized_dataset}")
+            train_dataset = ChunkedDatasetIterator(
+                dataset_dir=args.tokenized_dataset,
+                segment_size=segment_size,
+                history_size=history_size,
+                token_column=args.train_tokens,
+                seed=args.seed,
+                skip_first_n_samples=chunked_skip_samples
+            )
+            logger.info("ChunkedDatasetIterator created - chunks will be processed on-the-fly during training")
+        elif not args.streaming:
+            # Normal tokenized dataset processing
             train_dataset = train_dataset.select_columns([args.train_tokens]).map(lambda x: group_texts(x, segment_size, history_size,),
                                                             batched=True, batch_size=BATCH)
             # BUFFER = 1024
@@ -566,7 +727,13 @@ if __name__ == '__main__':
     logger.info("="*80)
     logger.info("TRAINING DATASET STATISTICS")
     logger.info("="*80)
-    logger.info(f"Dataset: {args.task_name}")
+    logger.info(f"Dataset: {args.task_name if args.task_name else args.tokenized_dataset}")
+    if is_chunked_train:
+        logger.info(f"Dataset format: CHUNKED (sequential chunk loading with group_texts processing)")
+    elif args.streaming:
+        logger.info(f"Dataset format: STREAMING")
+    else:
+        logger.info(f"Dataset format: REGULAR")
     logger.info(f"Segment size: {segment_size}")
     logger.info(f"History size: {history_size}")
     logger.info(f"Window size: {segment_size + history_size}")
@@ -582,8 +749,10 @@ if __name__ == '__main__':
     logger.info(f"Expected windows to process: {expected_windows:,}")
     logger.info(f"Expected tokens to process: {expected_tokens:,} ({expected_tokens/1e9:.2f}B)")
     
-    # FineWeb-Edu info
-    if 'fineweb' in args.task_name.lower():
+    # Dataset-specific info
+    if is_chunked_train:
+        logger.info(f"NOTE: Chunks will be loaded sequentially, each processed with group_texts, then trained on until exhausted")
+    if args.task_name and 'fineweb' in args.task_name.lower():
         logger.info(f"NOTE: FineWeb-Edu contains ~1.3 trillion tokens across ~billions of documents")
         logger.info(f"      You will process approximately {100 * expected_tokens / 1.3e12:.4f}% of the full dataset")
     logger.info("="*80)
