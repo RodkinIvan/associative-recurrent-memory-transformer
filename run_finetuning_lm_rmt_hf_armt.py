@@ -347,6 +347,7 @@ if __name__ == '__main__':
         """
         Loads chunked datasets (chunk_000000, chunk_000001, ...) sequentially.
         Each chunk is processed with group_texts just like a normal dataset.
+        Dynamically detects new chunks that appear during training.
         """
         def __init__(self, dataset_dir, segment_size, history_size, token_column='tokens', seed=42, 
                      skip_first_n_samples=0):
@@ -357,48 +358,87 @@ if __name__ == '__main__':
             self.seed = seed
             self.skip_first_n_samples = skip_first_n_samples  # For excluding val/test from first chunk
             
-            # Find all chunk directories
-            self.chunk_dirs = sorted([
-                d for d in self.dataset_dir.iterdir() 
-                if d.is_dir() and d.name.startswith('chunk_')
-            ])
+            # Find initial chunk directories
+            initial_chunks = self._get_chunk_dirs()
             
-            if not self.chunk_dirs:
+            if not initial_chunks:
                 raise ValueError(f"No chunks found in {dataset_dir}. Expected directories like 'chunk_000000', 'chunk_000001', etc.")
             
-            logger.info(f"Found {len(self.chunk_dirs)} chunks in {dataset_dir}")
-            logger.info(f"Chunks will be loaded and processed sequentially: {self.chunk_dirs[0].name} ... {self.chunk_dirs[-1].name}")
+            logger.info(f"Found {len(initial_chunks)} initial chunks in {dataset_dir}")
+            logger.info(f"Chunks will be loaded and processed sequentially: {initial_chunks[0].name} ... {initial_chunks[-1].name}")
+            logger.info(f"NOTE: Will dynamically check for new chunks during training")
             if self.skip_first_n_samples > 0:
                 logger.info(f"NOTE: First {self.skip_first_n_samples} samples from chunk_000000 will be skipped (reserved for validation/test)")
         
+        def _get_chunk_dirs(self):
+            """Get sorted list of chunk directories"""
+            return sorted([
+                d for d in self.dataset_dir.iterdir() 
+                if d.is_dir() and d.name.startswith('chunk_')
+            ])
+        
+        def _get_chunk_index(self, chunk_dir):
+            """Extract chunk index from directory name (e.g., 'chunk_000000' -> 0)"""
+            # Split by underscore and take the numeric part
+            return int(chunk_dir.name.split('_')[1])
+        
+        def _get_max_chunk_index(self):
+            """Get the maximum chunk index currently available"""
+            chunk_dirs = self._get_chunk_dirs()
+            if not chunk_dirs:
+                return -1
+            return self._get_chunk_index(chunk_dirs[-1])
+        
+        def _get_chunk_dir_by_index(self, target_idx):
+            """Get chunk directory path for a given index, returns None if not found"""
+            for chunk_dir in self._get_chunk_dirs():
+                if self._get_chunk_index(chunk_dir) == target_idx:
+                    return chunk_dir
+            return None
+        
         def __iter__(self):
-            """Iterate through all chunks, loading and processing one at a time"""
-            for chunk_idx, chunk_dir in enumerate(self.chunk_dirs):
-                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Loading {chunk_dir.name}...")
+            """Iterate through all chunks, loading and processing one at a time.
+            Dynamically checks for new chunks during training."""
+            chunk_idx = 0
+            
+            # Use while loop to dynamically check for new chunks
+            while chunk_idx <= self._get_max_chunk_index():
+                # Get actual chunk directory by index
+                chunk_dir = self._get_chunk_dir_by_index(chunk_idx)
+                
+                # Check if this chunk exists
+                if chunk_dir is None:
+                    logger.warning(f"[Chunk {chunk_idx + 1}] chunk with index {chunk_idx} does not exist yet, skipping...")
+                    chunk_idx += 1
+                    continue
+                
+                chunk_name = chunk_dir.name
+                max_chunk_idx = self._get_max_chunk_index()
+                logger.info(f"[Chunk {chunk_idx + 1}/{max_chunk_idx + 1}] Loading {chunk_name}...")
                 
                 # Load this chunk
                 chunk_dataset = datasets.load_from_disk(str(chunk_dir))
-                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Loaded {len(chunk_dataset)} samples from {chunk_dir.name}")
+                logger.info(f"[Chunk {chunk_idx + 1}/{max_chunk_idx + 1}] Loaded {len(chunk_dataset)} samples from {chunk_name}")
                 
                 # Skip validation/test samples from the first chunk
                 if chunk_idx == 0 and self.skip_first_n_samples > 0:
                     original_size = len(chunk_dataset)
                     chunk_dataset = chunk_dataset.select(range(self.skip_first_n_samples, len(chunk_dataset)))
-                    logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Skipped first {self.skip_first_n_samples} samples (val/test), using {len(chunk_dataset)}/{original_size} samples")
+                    logger.info(f"[Chunk {chunk_idx + 1}/{max_chunk_idx + 1}] Skipped first {self.skip_first_n_samples} samples (val/test), using {len(chunk_dataset)}/{original_size} samples")
                 
                 # Process chunk with group_texts (same as normal pipeline)
-                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Processing with group_texts (segment_size={self.seg}, history_size={self.hist})...")
+                logger.info(f"[Chunk {chunk_idx + 1}/{max_chunk_idx + 1}] Processing with group_texts (segment_size={self.seg}, history_size={self.hist})...")
                 
                 processed = chunk_dataset.select_columns([self.token_column]).map(
                     lambda x: group_texts(x, self.seg, self.hist),
                     batched=True,
-                    batch_size=1024
+                    batch_size=4096
                 )
                 
                 # Shuffle the processed chunk
                 processed = processed.shuffle(seed=self.seed + chunk_idx)
                 
-                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Processed into {len(processed)} windows, yielding...")
+                logger.info(f"[Chunk {chunk_idx + 1}/{max_chunk_idx + 1}] Processed into {len(processed)} windows, yielding...")
                 
                 # Yield all samples from this processed chunk
                 for sample in processed:
@@ -408,7 +448,15 @@ if __name__ == '__main__':
                 del chunk_dataset
                 del processed
                 gc.collect()
-                logger.info(f"[Chunk {chunk_idx + 1}/{len(self.chunk_dirs)}] Completed and unloaded {chunk_dir.name}")
+                logger.info(f"[Chunk {chunk_idx + 1}/{max_chunk_idx + 1}] Completed and unloaded {chunk_name}")
+                
+                # Move to next chunk
+                chunk_idx += 1
+                
+                # Check if new chunks appeared
+                new_max_chunk_idx = self._get_max_chunk_index()
+                if new_max_chunk_idx > max_chunk_idx:
+                    logger.info(f"[Dynamic Update] Detected {new_max_chunk_idx - max_chunk_idx} new chunks! Will continue training on them.")
 
     class ChunkedWindowStream(IterableDataset):
         def __init__(self, raw_ds, segment_size, history_size, chunk_tokens, dataset_length, seed=0):
