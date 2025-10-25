@@ -60,8 +60,8 @@ python create_config.py \
         --np $NP\
         --gradient_clipping 1.0
 cd ..
-ACCEL_CONFIG=~/rmt/wip/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml # DEEPSPEED
-DEEPSPEED_CONFIG=~/rmt/wip/accel_configs/exp/deepspeed/0s3_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0.json # DEEPSPEED
+ACCEL_CONFIG=$(pwd)/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml # DEEPSPEED
+DEEPSPEED_CONFIG=$(pwd)/accel_configs/exp/deepspeed/0s3_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0.json # DEEPSPEED
 
 
 # ACCEL_CONFIG=~/rmt/dev/accel_configs/accelerate_ds_bf16.yaml
@@ -108,7 +108,7 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --use_sink \
         --deepspeed $DEEPSPEED_CONFIG \
         --max_grad_norm 1.0 \
-        --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/fineweb_edu_100b_tokenized
+        --streaming --stream_chunk_docs 1000000
         # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
 done
 echo "done"

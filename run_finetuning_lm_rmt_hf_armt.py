@@ -138,6 +138,7 @@ parser.add_argument('--use_sink', action='store_true', default=False, help='use_
 parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner'], default='outer',
                     help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 parser.add_argument('--streaming', action='store_true', default=False, help='use streaming dataset')
+parser.add_argument('--stream_chunk_docs', type=int, default=5000, help='number of raw samples per streaming tokenization chunk')
 os.environ['HF_Trainer'] = '1'
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -272,9 +273,13 @@ if __name__ == '__main__':
                 # Take the first 1000 samples from train dataset for validation and test
                 if args.streaming:
                     # For streaming datasets, use take() and skip()
+                    # Shard by rank to avoid all ranks pulling the same samples
+                    world_size = getattr(training_args, 'world_size', None) or int(os.environ.get('WORLD_SIZE', '1'))
+                    rank = getattr(training_args, 'process_index', None) if hasattr(training_args, 'process_index') else int(os.environ.get('RANK', '0'))
+
                     validation_dataset = train_dataset.take(1000)
                     test_dataset = train_dataset.skip(1000).take(1000)
-                    train_dataset = train_dataset.skip(2000)
+                    train_dataset = train_dataset.skip(2000).shard(num_shards=world_size, index=rank)
                 else:
                     # For regular datasets, create random train/val/test split
                     logger.info("Creating random train/validation/test split from train dataset")
@@ -297,42 +302,32 @@ if __name__ == '__main__':
                 result = tokenizer.encode(examples['text'], return_tensors='pt')
                 examples[args.train_tokens] = result[0]
                 return examples
-            
-            # Apply tokenization on the fly
-            train_dataset = train_dataset.map(
-                tokenize_function,
-                batched=False,
-                # batch_size=256,
-                remove_columns=['text'],
-            )
+            if not args.streaming:
+                
+                # Apply tokenization on the fly
+                train_dataset = train_dataset.map(
+                    tokenize_function,
+                    batched=False,
+                    remove_columns=['text'],
+                )
             validation_dataset = validation_dataset.map(
                 tokenize_function,
                 batched=False,
                 remove_columns=['text'],
-                # desc="Tokenizing eval split",
-                # num_proc=1,
             )
             test_dataset = test_dataset.map(
                 tokenize_function,
                 batched=False,
                 remove_columns=['text'],
-                # desc="Tokenizing test split",
-                # num_proc=1,
             )
             
             # Create a DatasetDict with the processed splits
-            # nodes = torch.cuda.device_count()
-            # train_dataset = split_dataset_by_node(train_dataset, world_size=nodes, rank=0)
-            # validation_dataset = split_dataset_by_node(validation_dataset, world_size=nodes, rank=0)
-            # test_dataset = split_dataset_by_node(test_dataset, world_size=nodes, rank=0)
-
             dataset = datasets.DatasetDict({
                 'train': train_dataset.with_format("torch"),
                 'validation': validation_dataset.with_format("torch"),
                 'test': test_dataset.with_format("torch")
             })
             validation_dataset = dataset
-            # validation_dataset = datasets.load_from_disk('/mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized')
 
 
     segment_size = args.segment_size
@@ -692,19 +687,19 @@ if __name__ == '__main__':
         logger.info("Using chunked dataset - will load and process chunks sequentially")
         # Note: We'll create the ChunkedDatasetIterator below in the dataset prep section
         train_dataset = None  # Placeholder
-    else:
-        # Normal filtering for non-chunked datasets
-        if args.min_sample_len not in {16000, None}:
-            train_dataset = dataset['train'].filter(lambda sample: filter_by_len(sample, args.min_sample_len))
-        else:
-            train_dataset = dataset['train'].filter(filter_by_16k)
+    # else:
+    #     # Normal filtering for non-chunked datasets
+    #     if args.min_sample_len not in {16000, None}:
+    #         train_dataset = dataset['train'].filter(lambda sample: filter_by_len(sample, args.min_sample_len))
+    #     else:
+    #         train_dataset = dataset['train'].filter(filter_by_16k)
     
 
     
 
     with training_args.main_process_first(desc="dataset prep"):
         n_cpus = max(os.cpu_count() - 1, 1)
-        BATCH = 1024
+        BATCH = 4096
         
         if is_chunked_train:
             # Create ChunkedDatasetIterator which handles loading, processing, and yielding
@@ -725,45 +720,94 @@ if __name__ == '__main__':
             # BUFFER = 1024
             train_dataset = train_dataset.shuffle(seed=args.seed)
         else:
-            # Estimate number of tokens to consume per epoch and derive number of windows
-            tokens_per_chunk = 50_000_000  # adjust this estimate as needed
-            # tokens_per_chunk = 1_000_000
-            # Use a buffer at least as large as the number of windows for effective shuffling
-            # BUFFER = 2048
-            # if args.streaming:
-            #     train_dataset = train_dataset.shuffle(buffer_size=BUFFER, seed=args.seed)
-            # else:
-            #     train_dataset = train_dataset.shuffle(seed=args.seed)
-            # Wrap the raw stream in windowed iterable and shuffle windows
-            # length = 5_451_448
-            # train_dataset = ChunkedWindowStream(train_dataset, segment_size, history_size, tokens_per_chunk, length, args.seed)
-            train_dataset = OnlineWindowStream(
-                raw_ds=train_dataset, 
-                segment_size=segment_size, 
-                history_size=history_size, 
-                chunk_tokens=tokens_per_chunk, 
-                seed=args.seed
+            # Streaming: per-chunk pipeline → non-iterable HF Dataset → shuffle → tokenize (batched) → group_texts → shuffle
+            raw_stream = train_dataset  # this is the remaining stream after skipping 2000 docs for eval
+
+            def tokenize_batch(examples):
+                ids = tokenizer.batch_encode_plus(examples['text'], return_tensors=None, add_special_tokens=True)['input_ids']
+                return {args.train_tokens: ids}
+
+            class StreamingChunkToWindows(IterableDataset):
+                def __init__(self, raw_iterable, seg, hist, docs_per_chunk, seed=0):
+                    self.raw = raw_iterable
+                    self.seg = seg
+                    self.hist = hist
+                    self.docs_per_chunk = int(docs_per_chunk)
+                    self.seed = seed
+
+                def __iter__(self):
+                    rng = random.Random(self.seed)
+                    buf = []
+                    pbar = tqdm(total=self.docs_per_chunk, desc="Filling chunk", leave=False)
+                    for s in self.raw:
+                        buf.append(s)
+                        pbar.update(1)
+                        if len(buf) >= self.docs_per_chunk:
+                            pbar.set_description("Processing chunk")
+                            pbar.refresh()
+                            hf_ds = datasets.Dataset.from_list(buf)
+                            hf_ds = hf_ds.shuffle(seed=rng.randrange(1 << 30))
+                            tok_ds = hf_ds.map(tokenize_batch, batched=True, remove_columns=['text'], desc="Tokenizing chunk")
+                            win_ds = tok_ds.select_columns([args.train_tokens]).map(
+                                lambda x: group_texts(x, segment_size, history_size), batched=True, batch_size=BATCH, desc="Grouping chunk"
+                            )
+                            win_ds = win_ds.shuffle(seed=rng.randrange(1 << 30))
+                            for ex in win_ds:
+                                yield ex
+                            del hf_ds, tok_ds, win_ds
+                            gc.collect()
+                            buf = []
+                            pbar.close()
+                            pbar = tqdm(total=self.docs_per_chunk, desc="Filling chunk", leave=False)
+                    if buf:
+                        pbar.set_description("Processing tail chunk")
+                        pbar.refresh()
+                        hf_ds = datasets.Dataset.from_list(buf)
+                        hf_ds = hf_ds.shuffle(seed=rng.randrange(1 << 30))
+                        tok_ds = hf_ds.map(tokenize_batch, batched=True, remove_columns=['text'])
+                        win_ds = tok_ds.select_columns([args.train_tokens]).map(
+                            lambda x: group_texts(x, segment_size, history_size), batched=True, batch_size=BATCH
+                        )
+                        win_ds = win_ds.shuffle(seed=rng.randrange(1 << 30))
+                        for ex in win_ds:
+                            yield ex
+                        del hf_ds, tok_ds, win_ds
+                        gc.collect()
+                    pbar.close()
+
+            train_dataset = StreamingChunkToWindows(
+                raw_iterable=raw_stream,
+                seg=segment_size,
+                hist=history_size,
+                docs_per_chunk=getattr(args, 'stream_chunk_docs', 1_000_000),
+                seed=args.seed,
             )
-        valid_dataset = validation_dataset["validation"].select_columns([args.train_tokens]).map(
-            lambda x: group_texts(x, segment_size, val_history_size ), 
-            batched=True, 
-            # batch_size=BATCH, 
-            # desc=f"Grouping valid in chunks of {segment_size} and history {val_history_size}", 
-            # num_proc=n_cpus
+        # Convert validation/test to standard Datasets before grouping (important for group_texts)
+        val_base = validation_dataset["validation"].select_columns([args.train_tokens])
+        test_base = validation_dataset["test"].select_columns([args.train_tokens])
+        if isinstance(val_base, IterableDataset):
+            val_list = [ex for ex in val_base]
+            val_base = datasets.Dataset.from_list(val_list)
+        if isinstance(test_base, IterableDataset):
+            test_list = [ex for ex in test_base]
+            test_base = datasets.Dataset.from_list(test_list)
+
+        valid_dataset = val_base.map(
+            lambda x: group_texts(x, segment_size, val_history_size),
+            batched=True,
+            batch_size=BATCH,
         )
-        test_dataset = validation_dataset["test"].select_columns([args.train_tokens]).map(
-            lambda x: group_texts(x, segment_size, val_history_size), 
-            batched=True, 
-            # batch_size=BATCH, 
-            # desc=f"Grouping test in chunks of {segment_size} and history {val_history_size}", 
-            # num_proc=n_cpus
+        test_dataset = test_base.map(
+            lambda x: group_texts(x, segment_size, val_history_size),
+            batched=True,
+            batch_size=BATCH,
         )
 
     
     num_valid_examples = 1000
     if args.streaming or isinstance(valid_dataset, IterableDataset):
         # For streaming/iterable datasets, just take the first N examples
-        valid_dataset = valid_dataset.take(num_valid_examples)
+        valid_dataset = valid_dataset.take(min(num_valid_examples, len(valid_dataset)))
     else:
         # For regular datasets, sample evenly across the dataset
         valid_inds = np.linspace(1, len(valid_dataset)-1, num_valid_examples).astype(int).tolist()
