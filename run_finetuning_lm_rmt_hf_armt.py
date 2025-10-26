@@ -963,8 +963,19 @@ if __name__ == '__main__':
                     logger.info(f"Fraction of FineWeb-Edu (1.3T tokens): {100 * stats['total_tokens_consumed'] / 1.3e12:.4f}%")
                 logger.info("="*80)
     
-    # Create callback with expected tokens
+    # Import DeepSpeed callback for handling ZeRO-3 checkpoint consolidation
+    from deepspeed_push_callback import DeepSpeedCheckpointCallback
+    
+    # Determine the model class name for Hub pushing
+    model_class_name = "InnerLoopARMTForCausalLM" if args.armt_impl == 'inner' else "ARMTForCausalLM"
+    
+    # Create callbacks
     dataset_stats_callback = DatasetStatsCallback(train_dataset, expected_tokens)
+    deepspeed_callback = DeepSpeedCheckpointCallback(
+        consolidate_on_save=training_args.push_to_hub,
+        modeling_code_dir=os.path.join(args.working_dir, "modeling_amt"),
+        model_class_name=model_class_name if args.num_mem_tokens is not None else None
+    )
     
     trainer = Trainer(
         model=model,
@@ -974,7 +985,7 @@ if __name__ == '__main__':
         # test_dataset=test_dataset,
         # compute_metrics=compute_metrics,
         data_collator=collate_fn,
-        callbacks=[dataset_stats_callback],
+        callbacks=[dataset_stats_callback, deepspeed_callback],
     )
 
 
