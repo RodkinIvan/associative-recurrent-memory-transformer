@@ -23,7 +23,7 @@ except Exception as e:
     raise e
 
 # Reuse utilities from the existing implementation to ensure identical math
-from modeling_amt.language_modeling import DPFP, invert_attn_mask as _invert_attn_mask, attn_mask_to_4d
+from modeling_amt.language_modeling import DPFP, invert_attn_mask, attn_mask_to_4d
 
 def reverse_invert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
     if os.environ.get("NOT_INVERT_ATTN_MASK"):
@@ -50,7 +50,7 @@ def is_empty_past_key_values(past_key_values: Optional[DynamicCache], layer_idx:
         return True
     return False
 
-invert_attn_mask = lambda mask, dtype: (_invert_attn_mask(mask, dtype) if not os.environ.get("NOT_INVERT_ATTN_MASK") else mask)
+_invert_attn_mask = lambda mask, dtype: (invert_attn_mask(mask, dtype) if not os.environ.get("NOT_INVERT_ATTN_MASK") else mask)
 
 def segment_tensor(t: torch.Tensor, start_idx: int, end_idx: int, seq_len: int) -> torch.Tensor:
     if not isinstance(t, torch.Tensor):
@@ -348,7 +348,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         if attention_mask is None:
             attention_mask = torch.ones(bsz, seq_len, device=hidden_states.device, dtype=hidden_states.dtype)
             attention_mask = attn_mask_to_4d(attention_mask, upper=False, query_len=seq_len)
-            attention_mask = invert_attn_mask(attention_mask, hidden_states.dtype)
+            attention_mask = _invert_attn_mask(attention_mask, hidden_states.dtype)
         out_full = []
 
         # Initialize associative memory from persisted state if available
@@ -397,7 +397,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                 # print(base_cur4d.shape, "base_cur4d", "*"*100)
                 base_cur4d = reverse_invert_attn_mask(attn_mask)
                 seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
-                seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
+                seg_mask = _invert_attn_mask(seg_mask, seg_aug.dtype)
 
                 if past_attn_mask is not None:
 
@@ -405,7 +405,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                     if self.use_sink:
                         base_past4d[:, :, 0, :] = 0 # sink cannot attend to others
                     # base_past4d = torch.ones_like(base_past4d)
-                    base_past4d = invert_attn_mask(base_past4d, seg_aug.dtype)
+                    base_past4d = _invert_attn_mask(base_past4d, seg_aug.dtype)
 
                     # print(base_past4d.shape, "base_past4d", "*"*100)
                     # print(seg_mask.shape, "seg_mask", "*"*100)
@@ -415,7 +415,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
             else:
                 base_cur4d = reverse_invert_attn_mask(attn_mask)
                 seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
-                seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
+                seg_mask = _invert_attn_mask(seg_mask, seg_aug.dtype)
             # print("seg_mask", reverse_invert_attn_mask(seg_mask)[0][0])
             # print("seg_mask", seg_mask.shape)
             seg_pos_ids = self._get_segment_positions(kwargs.get("position_ids", None), start, end, seg_aug.device)
@@ -862,7 +862,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             else:
                 base_2d = seg["attention_mask"]
             cur4d = attn_mask_to_4d(base_2d, upper=False, query_len=seg_len)
-            cur4d = invert_attn_mask(cur4d, dtype=dtype)
+            cur4d = _invert_attn_mask(cur4d, dtype=dtype)
 
             # Absolute position ids (match horizontal behavior when given position_ids=None)
             position_ids = torch.arange(pos_offset, pos_offset + seg_len, device=device).long().unsqueeze(0)
