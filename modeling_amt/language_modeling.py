@@ -70,6 +70,8 @@ def attn_mask_to_4d(attn_mask, upper, query_len):
     return mask
 
 def invert_attn_mask(attn_mask, dtype):
+        if os.environ.get("NOT_INVERT_ATTN_MASK"):
+            return attn_mask
         min_dtype = torch.finfo(dtype).min
         # Use the same dtype as attn_mask to avoid dtype conversion
         one = torch.tensor(1.0, dtype=attn_mask.dtype, device=attn_mask.device)
