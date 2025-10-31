@@ -638,7 +638,7 @@ if __name__ == '__main__':
                 return {col: flat.tolist()}
 
             # 2. sliding-window with stride = segment)suze
-            starts  = np.arange(history_size, len(flat) - segment_size + 1, segment_size, dtype=np.int32)
+            starts  = np.arange(history_size, len(flat) - segment_size - history_size + 1, segment_size + history_size, dtype=np.int32)
             idx     = starts[:, None] + np.arange(-history_size, segment_size, dtype=np.int32)
             windows = flat[idx]                                # (n_windows, history_size+block)
             result[col] = windows.tolist()
