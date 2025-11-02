@@ -18,7 +18,6 @@ docker run -dit --gpus all --shm-size=16g \
 Notes:
 - The container captures all GPUs via `--gpus all`, and the script sets `CUDA_VISIBLE_DEVICES` accordingly.
 - `create_env.sh` builds the `pretrain` conda env inside the image.
-- `scripts/fineweb/tokenize_fineweb_edu.py` streams and saves tokenized chunks to `/mnt/data/users/ivan.rodkin/lab/datasets/fineweb_edu_100b_tokenized` (mount this path).
 - The training script is `scripts/pretrain/finetune_armt_inner_llama3.2_cc_sliding_deepspeed.sh`; the runner auto-updates its `CUDA_VISIBLE_DEVICES` to use all GPUs in the container.
 
 
