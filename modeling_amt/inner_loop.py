@@ -620,6 +620,8 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             return obj
 
         layers = _get_layers_from_model(self.model)
+        self.wrap_layers = config.get("wrap_layers", [1,] * len(layers))
+        assert len(self.wrap_layers) == len(layers)
         rotary_fn = None
         if hasattr(self.model, "model") and hasattr(self.model.model, "rotary_emb"):
             rotary_fn = self.model.model.rotary_emb
@@ -627,23 +629,24 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             rotary_fn = self.model.gpt_neox.rotary_emb
 
         for i in range(len(layers)):
-            layers[i] = InnerLoopAssociativeLayerWrapper(
-                layer=layers[i],
-                d_model=d_model,
-                num_mem_tokens=self.num_mem_tokens,
-                d_mem=self.d_mem,
-                segment_size=self.segment_size,
-                n_heads=self.n_heads,
-                correction=self.correction,
-                use_denom=self.use_denom,
-                gating=self.gating,
-                use_sink=self.use_sink,
-                sliding_window=self.sliding_window,
-                get_memory_fn=lambda self_ref=self: self_ref.memory,
-                get_sink_fn=lambda self_ref=self: getattr(self_ref, "sink", None),
-                rotary_fn=rotary_fn,
-                info={"layer": i},
-            )
+            if self.wrap_layers[i]:
+                layers[i] = InnerLoopAssociativeLayerWrapper(
+                    layer=layers[i],
+                    d_model=d_model,
+                    num_mem_tokens=self.num_mem_tokens,
+                    d_mem=self.d_mem,
+                    segment_size=self.segment_size,
+                    n_heads=self.n_heads,
+                    correction=self.correction,
+                    use_denom=self.use_denom,
+                    gating=self.gating,
+                    use_sink=self.use_sink,
+                    sliding_window=self.sliding_window,
+                    get_memory_fn=lambda self_ref=self: self_ref.memory,
+                    get_sink_fn=lambda self_ref=self: getattr(self_ref, "sink", None),
+                    rotary_fn=rotary_fn,
+                    info={"layer": i},
+                )
 
         if self.freeze_mem_flag:
             for layer in _get_layers_from_model(self.model):
