@@ -172,6 +172,11 @@ if __name__ == '__main__':
     training_args_dict['save_steps'] = 1000
     training_args_dict['push_to_hub'] = True
     training_args_dict['hub_strategy'] = 'every_save'
+    # Avoid duplicating iterable streams across dataloader workers when streaming
+    if args.streaming:
+        training_args_dict['dataloader_num_workers'] = 0
+    else:
+        training_args_dict['dataloader_num_workers'] = args.data_n_workers
     training_args = TrainingArguments(**training_args_dict)
 
     if args.valid_tokenized_dataset is None:
@@ -199,6 +204,22 @@ if __name__ == '__main__':
             return False
         chunk_dirs = [d for d in dataset_dir.iterdir() if d.is_dir() and d.name.startswith('chunk_')]
         return len(chunk_dirs) > 0
+
+    # Resolve rank/world size robustly
+    def _get_rank_world_size():
+        try:
+            import torch.distributed as dist
+            if dist.is_available() and dist.is_initialized():
+                return dist.get_rank(), dist.get_world_size()
+        except Exception:
+            pass
+        rank = getattr(training_args, 'process_index', None)
+        world_size = getattr(training_args, 'world_size', None)
+        if rank is None:
+            rank = int(os.environ.get('RANK', '0'))
+        if world_size is None:
+            world_size = int(os.environ.get('WORLD_SIZE', '1'))
+        return int(rank), int(world_size)
 
     with training_args.main_process_first(desc="dataset prep"):
         if args.tokenized_dataset is not None:
@@ -274,13 +295,15 @@ if __name__ == '__main__':
             if args.valid_task_name is not None:
                 validation_dataset = datasets.load_dataset(args.valid_task_name, split='validation', trust_remote_code=True)
                 test_dataset = datasets.load_dataset(args.valid_task_name, split='test', trust_remote_code=True)
+                if args.streaming:
+                    rank, world_size = _get_rank_world_size()
+                    train_dataset = train_dataset.shard(num_shards=world_size, index=rank)
             else:
                 # Take the first 1000 samples from train dataset for validation and test
                 if args.streaming:
                     # For streaming datasets, use take() and skip()
                     # Shard by rank to avoid all ranks pulling the same samples
-                    world_size = getattr(training_args, 'world_size', None) or int(os.environ.get('WORLD_SIZE', '1'))
-                    rank = getattr(training_args, 'process_index', None) if hasattr(training_args, 'process_index') else int(os.environ.get('RANK', '0'))
+                    rank, world_size = _get_rank_world_size()
 
                     validation_dataset = train_dataset.take(1000)
                     test_dataset = train_dataset.skip(1000).take(1000)
@@ -780,12 +803,15 @@ if __name__ == '__main__':
                         gc.collect()
                     pbar.close()
 
+            _rank, _world = _get_rank_world_size()
+            _total_docs_cfg = getattr(args, 'stream_chunk_docs', 1_000_000)
+            _docs_per_rank = max(1000, (_total_docs_cfg + _world - 1) // _world)  # ceil divide with floor cap
             train_dataset = StreamingChunkToWindows(
                 raw_iterable=raw_stream,
                 seg=segment_size,
                 hist=history_size,
-                docs_per_chunk=getattr(args, 'stream_chunk_docs', 1_000_000),
-                seed=args.seed,
+                docs_per_chunk=_docs_per_rank,
+                seed=(args.seed + int(_rank)),
             )
         # Convert validation/test to standard Datasets before grouping (important for group_texts)
         val_base = validation_dataset["validation"].select_columns([args.train_tokens])
