@@ -139,6 +139,8 @@ parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner'], default
                     help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 parser.add_argument('--streaming', action='store_true', default=False, help='use streaming dataset')
 parser.add_argument('--stream_chunk_docs', type=int, default=5000, help='number of raw samples per streaming tokenization chunk')
+parser.add_argument('--alternate_layers', action='store_true', default=False,
+                    help='If set, wrap alternating transformer layers (1,0,1,0,...) in ARMT')
 os.environ['HF_Trainer'] = '1'
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -923,6 +925,30 @@ if __name__ == '__main__':
 
         logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
 
+        # Optionally compute alternating wrap pattern for layers
+        wrap_layers_arg = None
+        if args.alternate_layers:
+            try:
+                # Prefer counting layers via the actual model's layers container
+                layers_attr_path = args.layers_attr if args.layers_attr is not None else "model.layers"
+                container = model
+                for attr in layers_attr_path.split('.'):
+                    container = getattr(container, attr)
+                n_layers = len(container)
+            except Exception:
+                # Fallback to common config attributes
+                cfg = getattr(model, 'config', None)
+                n_layers = None
+                for field in ("num_hidden_layers", "n_layer", "n_layers"):
+                    val = getattr(cfg, field, None) if cfg is not None else None
+                    if val is not None:
+                        n_layers = int(val)
+                        break
+                if n_layers is None:
+                    n_layers = 0
+            # Start with 1 to wrap the first layer, then alternate 1,0,1,0,...
+            wrap_layers_arg = [1 if (i % 2 == 0) else 0 for i in range(n_layers)]
+
         # Create ARMT config
         armt_config = ARMTConfig(
             base_model_name=args.from_pretrained,
@@ -934,6 +960,7 @@ if __name__ == '__main__':
             attend_to_previous_input=args.attend_to_previous_input,
             use_sink=args.use_sink,
             layers_attr=args.layers_attr if args.layers_attr is not None else "model.layers",
+            wrap_layers=wrap_layers_arg,
             wrap_pos=False,
             correction=True,
             n_heads=1,

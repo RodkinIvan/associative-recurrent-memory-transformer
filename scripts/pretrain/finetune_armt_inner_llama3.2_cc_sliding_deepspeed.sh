@@ -108,7 +108,8 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --use_sink \
         --deepspeed $DEEPSPEED_CONFIG \
         --max_grad_norm 1.0 \
-        --streaming --stream_chunk_docs 1000000
+        --streaming --stream_chunk_docs 10000 \
+        --alternate_layers
         # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
 done
 echo "done"
