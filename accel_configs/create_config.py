@@ -36,7 +36,7 @@ deepspeed_config = {
         "enabled": "auto"
     },
     "zero_optimization": {
-        "stage": 3
+        "stage": None
     },
     "gradient_accumulation_steps": None,
     "gradient_clipping": 1.0,
@@ -55,10 +55,12 @@ parser.add_argument("--train_micro_batch_size_per_gpu", default=256)
 parser.add_argument("--gradient_accumulation_steps", default=1)
 parser.add_argument("--np", default=1)
 parser.add_argument("--gradient_clipping", default=1.0)
+parser.add_argument("--stage", default=2)
 # parser.add_argument('--h', type=str, help='path to model configuration file (default: "")')
 
 args = parser.parse_args()
 
+deepspeed_config["zero_optimization"]["stage"] = args.stage
 if args.bf16:
     precision = "bf16_"
 elif args.fp16:
@@ -79,7 +81,7 @@ accel_config_path = accel_dir / ("deepspeed_" + precision + "tbs{}bs{}g{}c{}np{}
     args.np,
 )
 
-deepspeed_config_path = ds_dir / ("0s3_" + precision + "tbs{}bs{}g{}c{}.json").format(
+deepspeed_config_path = ds_dir / (f"0s{args.stage}_" + precision + "tbs{}bs{}g{}c{}.json").format(
     args.train_batch_size,
     args.train_micro_batch_size_per_gpu,
     args.gradient_accumulation_steps,

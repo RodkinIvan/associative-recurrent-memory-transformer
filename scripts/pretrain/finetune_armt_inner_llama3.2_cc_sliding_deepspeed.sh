@@ -59,6 +59,7 @@ python create_config.py \
         --gradient_accumulation_steps $GRAD_ACC_STEPS\
         --np $NP\
         --gradient_clipping 1.0
+        --stage 3
 cd ..
 ACCEL_CONFIG=$(pwd)/accel_configs/exp/accelerate/deepspeed_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0np${NP}.yaml # DEEPSPEED
 DEEPSPEED_CONFIG=$(pwd)/accel_configs/exp/deepspeed/0s3_bf16_tbs${TBS}bs${BS}g${GRAD_ACC_STEPS}c1.0.json # DEEPSPEED
