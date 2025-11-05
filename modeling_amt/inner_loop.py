@@ -10,7 +10,72 @@ from torch.nn import CrossEntropyLoss
 from transformers import PreTrainedModel, PretrainedConfig
 from transformers.cache_utils import DynamicCache
 import warnings
-from modeling_amt.model import ARMTConfig
+
+
+class ARMTConfig(PretrainedConfig):
+    model_type = "armt"
+
+    def __init__(self,
+                 base_model_name=None,
+                 base_model_config=None,
+                 num_mem_tokens=16,
+                 d_mem=512,
+                 segment_size=512,
+                 segment_alignment="left",
+                 sliding_window=False,
+                 attend_to_previous_input=False,
+                 use_sink=False,
+                 layers_attr="model.layers",
+                 wrap_pos=False,
+                 correction=True,
+                 n_heads=1,
+                 use_denom=True,
+                 gating=False,
+                 freeze_mem=False,
+                 act_on=False,
+                 max_hop=4,
+                 act_type="associative",
+                 act_format="linear",
+                 noisy_halting=False,
+                 constant_depth=False,
+                 time_penalty=0.0,
+                 wrap_layers=None,
+                 **kwargs):
+        super().__init__(**kwargs)
+        # Validate mutual exclusivity
+        if (base_model_name is not None) and (base_model_config is not None):
+            raise ValueError("Exactly one of `base_model_name` or `base_model_config` must be provided. Set the other to None.")
+        self.base_model_name = base_model_name
+        # Optional alternative to base_model_name: a config (dict/PretrainedConfig/name-or-path)
+        self.base_model_config = base_model_config
+        self.num_mem_tokens = num_mem_tokens
+        self.d_mem = d_mem
+
+        self.segment_size = segment_size
+        self.segment_alignment = segment_alignment
+        self.sliding_window = sliding_window
+        self.attend_to_previous_input = attend_to_previous_input
+        self.use_sink = use_sink
+        self.layers_attr = layers_attr
+        self.wrap_pos = wrap_pos
+        self.correction = correction
+        self.n_heads = n_heads
+        self.use_denom = use_denom
+        self.gating = gating
+        self.freeze_mem = freeze_mem
+        self.act_on = act_on
+        self.max_hop = max_hop
+        self.act_type = act_type
+        self.act_format = act_format
+        self.noisy_halting = noisy_halting
+        self.constant_depth = constant_depth
+        self.time_penalty = time_penalty
+        self.wrap_layers = wrap_layers
+    def get(self, attr: str, default=None):
+        if hasattr(self, attr):
+            return getattr(self, attr)
+        else:
+            return default
 
 try:
     from liger_kernel.transformers import apply_liger_kernel_to_llama
@@ -504,7 +569,6 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         # Convert to legacy cache format for easier manipulation
         if hasattr(past_key_values, 'to_legacy_cache'):
             legacy = past_key_values.to_legacy_cache()
-            legacy = past_key_values.to_legacy_cache()
         
         # Keep only the most recent real tokens within the window size
         k, v = legacy[self.info['layer']]
@@ -526,7 +590,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
     # Reuse the config used by the outer-loop variant for parity
     config_class = ARMTConfig
 
-    def __init__(self, config: PretrainedConfig, **kwargs):
+    def __init__(self, config: ARMTConfig, **kwargs):
         global LIGER_KERNEL_AVAILABLE
         super().__init__(config, **kwargs)
         from transformers import AutoConfig, AutoModelForCausalLM
@@ -536,7 +600,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         bm_cfg = getattr(config, "base_model_config", None)
         bm_name = getattr(config, "base_model_name", None)
 
-        if 'llama' not in bm_name:
+        if bm_name is None or 'llama' not in bm_name:
             LIGER_KERNEL_AVAILABLE = False
             os.environ["ARMT_DISABLE_LIGER_KERNEL"] = "1"
         if LIGER_KERNEL_AVAILABLE and not os.environ.get("ARMT_DISABLE_LIGER_KERNEL"):

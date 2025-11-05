@@ -5,13 +5,13 @@ Simple test to verify alignment between generate and forward methods.
 
 import torch
 from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
-from transformers import AutoConfig
+from modeling_amt.model import ARMTConfig
 
 def main():
     print("Loading inner-loop ARMT model...")
     
     # Create a simple config
-    config = AutoConfig.from_pretrained('meta-llama/Llama-3.2-1B')
+    config = ARMTConfig()
     config.base_model_name = 'meta-llama/Llama-3.2-1B'
     config.num_mem_tokens = 4
     config.d_mem = 4
@@ -21,6 +21,8 @@ def main():
     
     # Create model
     model = InnerLoopARMTForCausalLM(config)
+    for layer in model.get_layers():
+        torch.nn.init.normal_(layer.W_mv.weight, mean=0.0, std=0.02)
     model.eval()
     
     # Simple test input

@@ -5,10 +5,11 @@ from typing import Optional
 from transformers import PretrainedConfig
 
 from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
+from modeling_amt.model import ARMTConfig
 
 
 def build_model(sliding_window: bool = False) -> InnerLoopARMTForCausalLM:
-    cfg = PretrainedConfig()
+    cfg = ARMTConfig()
     # Base tiny GPT-2 config (randomly initialized, no download required)
     cfg.base_model_config = {
         "model_type": "gpt2",
@@ -31,6 +32,8 @@ def build_model(sliding_window: bool = False) -> InnerLoopARMTForCausalLM:
     cfg.sliding_window = bool(sliding_window)
 
     model = InnerLoopARMTForCausalLM(cfg)
+    for layer in model.get_layers():
+        torch.nn.init.normal_(layer.W_mv.weight, mean=0.0, std=0.02)
     model.eval()
     return model
 
