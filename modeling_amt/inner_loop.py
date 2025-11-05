@@ -620,7 +620,8 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
             return obj
 
         layers = _get_layers_from_model(self.model)
-        self.wrap_layers = config.get("wrap_layers", [1,] * len(layers))
+        wrap_layers = config.get("wrap_layers")
+        self.wrap_layers = wrap_layers if wrap_layers is not None else [1,] * len(layers)
         assert len(self.wrap_layers) == len(layers)
         rotary_fn = None
         if hasattr(self.model, "model") and hasattr(self.model.model, "rotary_emb"):
@@ -649,8 +650,9 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
                 )
 
         if self.freeze_mem_flag:
-            for layer in _get_layers_from_model(self.model):
-                layer.freeze_mem()
+            for i, layer in enumerate(_get_layers_from_model(self.model)):
+                if self.wrap_layers[i]:
+                    layer.freeze_mem()
 
 
         # Expose convenience accessor
@@ -660,18 +662,21 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
 
     # ----- control helpers -----
     def generate_mode(self, is_on: bool):
-        for layer in self.get_layers():
-            layer.generate_mode = is_on
+        for i, layer in enumerate(self.get_layers()):
+            if self.wrap_layers[i]:
+                layer.generate_mode = is_on
 
     def zero_mem(self):
         """Reset memory state for all layers."""
-        for layer in self.get_layers():
-            layer.zero_mem()
+        for i, layer in enumerate(self.get_layers()):
+            if self.wrap_layers[i]:
+                layer.zero_mem()
 
     def detach_mem(self):
         """Detach memory state for all layers."""
-        for layer in self.get_layers():
-            layer.detach_mem()
+        for i, layer in enumerate(self.get_layers()):
+            if self.wrap_layers[i]:
+                layer.detach_mem()
 
     def augment_sequence(self, hidden_states: torch.Tensor, mem: torch.Tensor, sink: torch.Tensor = None):
         segments = torch.split(hidden_states, self.segment_size, dim=1)
