@@ -102,6 +102,10 @@ parser.add_argument('--no_denom', action='store_true', default=False,
 parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
+parser.add_argument('--freeze_mem', action='store_true', default=False,
+                    help='Freeze memory parameters in ARMT')
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params'], default='outer',
+                    help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 # XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
@@ -347,11 +351,11 @@ if __name__ == '__main__':
     with accelerator.main_process_first():
         if os.path.exists(path):
             print(f"Loading {dataset_name} from disk.")
-            train_dataset = torch.load(os.path.join(path, 'train'))
-            valid_dataset = torch.load(os.path.join(path, 'valid'))
-            test_dataset = torch.load(os.path.join(path, 'test'))
+            train_dataset = torch.load(os.path.join(path, 'train'), weights_only=False)
+            valid_dataset = torch.load(os.path.join(path, 'valid'), weights_only=False)
+            test_dataset = torch.load(os.path.join(path, 'test'), weights_only=False)
         else:
-            os.system(f"mkdir {path}")
+            os.makedirs(path, exist_ok=True)
             train_dataset = ARDataset(args.key_size, args.value_size, sample_len=args.num_pairs, num_samples=args.train_size)
             valid_dataset = ARDataset(args.key_size, args.value_size, sample_len=args.num_test_pairs, num_samples=args.valid_size)
             test_dataset = ARDataset(args.key_size, args.value_size, sample_len=args.num_test_pairs, num_samples=args.test_size)
@@ -379,31 +383,67 @@ if __name__ == '__main__':
     model_cls = get_cls_by_name(args.model_cls)
 
     logger.info(f'Using model class: {model_cls}')
+    armt_base_model_config = None
+    armt_base_model_name = None
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
         model = model_cls(config=model_cfg)
+        armt_base_model_config = model_cfg
     else:
         logger.info(f'Loading pretrained model: {args.from_pretrained}')
         model = model_cls.from_pretrained(args.from_pretrained)
+        armt_base_model_name = args.from_pretrained
 
     # ## add [GEN] token
     # model.resize_token_embeddings(len(tokenizer))
-    
-    ## load cpt of backbone model
+
+    # Decide ARMT implementation
+    use_inner_armt = args.armt_impl in ['inner', 'mem_params']
+
+    # Optionally load backbone checkpoint
+    backbone_state_dict = None
     if args.backbone_cpt:
         backbone_cpt = os.path.join(args.backbone_cpt, "model_best.pth")
         cpt = torch.load(backbone_cpt, map_location='cpu')
         model.load_state_dict(cpt['model_state_dict'])
         logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
 
-    # Pass memory settings to pretrained model
-    if True:
-        
+    if use_inner_armt:
+        if args.num_mem_tokens is None:
+            raise ValueError('--armt_impl inner/mem_params requires --num_mem_tokens to be set')
+        from modeling_amt.model import ARMTConfig
+        if args.armt_impl == 'inner':
+            from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
+            armt_model_cls = InnerLoopARMTForCausalLM
+        else:
+            from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM
+            armt_model_cls = MemoryParamsARMTForCausalLM
+
+        layers_attr = args.layers_attr if args.layers_attr is not None else 'model.layers'
+        armt_config = ARMTConfig(
+            base_model_name=armt_base_model_name,
+            base_model_config=armt_base_model_config,
+            num_mem_tokens=args.num_mem_tokens,
+            d_mem=args.d_mem,
+            segment_size=block_size,
+            segment_alignment='left',
+            layers_attr=layers_attr,
+            wrap_pos=args.wrap_pos,
+            n_heads=1,
+        )
+        logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
+        model = armt_model_cls(config=armt_config)
+        logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
+
+        if backbone_state_dict is not None:
+            load_info = model.load_state_dict(backbone_state_dict, strict=False)
+            logger.info(f'Loaded backbone state dict into inner ARMT (missing={getattr(load_info, "missing_keys", [])}, unexpected={getattr(load_info, "unexpected_keys", [])})')
+    else:
+        # Pass memory settings to pretrained model (outer wrapper)
         memory_cell_cls = get_cls_by_name(args.memory_cell_cls)
         recurrent_wrapper_cls = get_cls_by_name(args.recurrent_wrapper_cls)
         logger.info(f'Wrapping in: {memory_cell_cls} and {recurrent_wrapper_cls}')
-        
-        
+
         mem_cell_args = dict(
             base_model=model,
         )
@@ -415,28 +455,36 @@ if __name__ == '__main__':
             mem_cell_args['wrap_pos'] = args.wrap_pos
         if args.layers_attr is not None:
             mem_cell_args['layers_attr'] = args.layers_attr
-        if args.no_denom is not None:
+        if args.no_denom:
             mem_cell_args['use_denom'] = not args.no_denom
-
+        if args.freeze_mem:
+            mem_cell_args['freeze_mem'] = args.freeze_mem
         if args.no_correction:
             mem_cell_args['correction'] = False
 
         cell = memory_cell_cls(**mem_cell_args)
-        model = recurrent_wrapper_cls(cell, 
-                                      segment_size=block_size,
-                                      max_n_segments=args.max_n_segments, 
-                                    #   vary_n_segments=args.vary_n_segments,
-                                      k2=args.k2,
-                                      segment_alignment=args.segment_alignment
+        model = recurrent_wrapper_cls(
+            cell,
+            segment_size=block_size,
+            max_n_segments=args.max_n_segments,
+            # vary_n_segments=args.vary_n_segments,
+            k2=args.k2,
+            segment_alignment=args.segment_alignment,
         )
-                                    
 
-        ## load cpt of rmt
-        if args.model_cpt and args.model_cpt != 'None':
-            model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
+    # Load model checkpoint (works for both inner ARMT and outer wrapper)
+    if args.model_cpt and args.model_cpt != 'None':
+        model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
+        if os.path.exists(model_cpt):
             cpt = torch.load(model_cpt, map_location='cpu')
-            model.load_state_dict(cpt)
-            logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+            model.load_state_dict(cpt, strict=False)
+        else:
+            import safetensors
+            model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
+            cpt = safetensors.torch.load_file(model_cpt)
+            w = model.load_state_dict(cpt, strict=False)
+            logger.info(f'loaded model with mis w {w}')
+        logger.info(f'Loaded model state dict from: {args.model_cpt}')
 
     if args.freeze_model_weights:
         for n, p in model.named_parameters():

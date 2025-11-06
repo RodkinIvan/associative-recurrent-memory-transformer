@@ -131,7 +131,7 @@ parser.add_argument('--freeze_mem', action='store_true', default=False,
 parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
-parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner'], default='outer',
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params'], default='outer',
                     help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 # XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
@@ -405,14 +405,18 @@ if __name__ == '__main__':
         if args.armt_impl == 'inner':
             backbone_state_dict = cpt
 
-    use_inner_armt = args.armt_impl == 'inner'
+    use_inner_armt = args.armt_impl in ['inner', 'mem_params']
     if use_inner_armt:
         assert not args.act_on, "Not yet implemented"
         if args.num_mem_tokens is None:
             raise ValueError('--armt_impl inner requires --num_mem_tokens to be set')
         from modeling_amt.model import ARMTConfig
-        from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
-
+        if args.armt_impl == 'inner':
+            from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
+            armt_model_cls = InnerLoopARMTForCausalLM
+        elif args.armt_impl == 'mem_params':
+            from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM
+            armt_model_cls = MemoryParamsARMTForCausalLM        
         layers_attr = args.layers_attr if args.layers_attr is not None else 'model.layers'
         armt_config = ARMTConfig(
             base_model_name=armt_base_model_name,
@@ -426,7 +430,7 @@ if __name__ == '__main__':
             n_heads=1,
         )
         logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
-        model = InnerLoopARMTForCausalLM(config=armt_config)
+        model = armt_model_cls(config=armt_config)
         logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
 
         if backbone_state_dict is not None:
