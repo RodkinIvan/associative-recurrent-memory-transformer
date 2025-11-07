@@ -777,6 +777,10 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
         if labels is None:
             return None
         first = labels[:, :1]
+
+        # add -100 token to ensure the correct splitting
+        labels = torch.cat([labels, -100 * torch.ones_like(first)], dim=1)
+
         segments = torch.split(labels[:, 1:], self.segment_size, dim=1)
         if self.use_sink:
             augmented_segments = [torch.cat([
@@ -790,7 +794,9 @@ class InnerLoopARMTForCausalLM(PreTrainedModel):
                 -100 * torch.ones(segment.shape[0], self.num_mem_tokens, device=segment.device, dtype=segment.dtype)
             ], dim=1) for segment in segments]
         augmented_segments = torch.cat(augmented_segments, dim=1)
-        augmented_labels = torch.cat([first, augmented_segments], dim=1)
+
+        # remove -100 token and concatenate the original first label (it is not supposed to be used in loss computation, though)
+        augmented_labels = torch.cat([first, augmented_segments[:, :-1]], dim=1)
         return augmented_labels
 
     def augment(self, input_ids, inputs_embeds, attention_mask, labels):
