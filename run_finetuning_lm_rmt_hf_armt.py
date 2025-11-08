@@ -135,7 +135,7 @@ parser.add_argument('--layers_attr', type=str, default=None, help='attribute of 
 
 parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
 parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
-parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner'], default='outer',
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params'], default='outer',
                     help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 parser.add_argument('--streaming', action='store_true', default=False, help='use streaming dataset')
 parser.add_argument('--stream_chunk_docs', type=int, default=5000, help='number of raw samples per streaming tokenization chunk')
@@ -974,7 +974,13 @@ if __name__ == '__main__':
         )
 
         # Create ARMT model (outer vs inner loop)
-        armt_model_cls = InnerLoopARMTForCausalLM if args.armt_impl == 'inner' else ARMTForCausalLM
+        if args.armt_impl == 'inner':
+            armt_model_cls = InnerLoopARMTForCausalLM
+        elif args.armt_impl == 'mem_params':
+            from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM
+            armt_model_cls = MemoryParamsARMTForCausalLM
+        else:
+            armt_model_cls = ARMTForCausalLM
 
         ## load cpt of ARMT
         if args.model_cpt and args.model_cpt != 'None':
