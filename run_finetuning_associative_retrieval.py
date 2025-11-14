@@ -104,14 +104,17 @@ parser.add_argument('--no_correction', action='store_true', default=False,
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
 parser.add_argument('--freeze_mem', action='store_true', default=False,
                     help='Freeze memory parameters in ARMT')
-parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params'], default='outer',
-                    help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params', 'thinking'], default='outer',
+                    help='ARMT implementation: outer (AssociativeRecurrentWrapper), inner (per-layer inner-loop), '
+                         'mem_params (learnable memory params), or thinking (Thinking inner-loop variant)')
 # XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
 parser.add_argument('--num_mem_tokens', type=int, default=None, help='number of memory tokens.')
 parser.add_argument('--max_n_segments', type=int, default=1, help='maximal segment number')
 parser.add_argument('--vary_n_segments', action='store_true', default=False, help='Randomly choose segment number from 1 to max_n_segments')
 parser.add_argument('--segment_alignment', type=str, default=None, help="How to align segments when splitting input")
+parser.add_argument('--reading_depth_multiplier', type=int, default=1, help='reading depth multiplier')
+parser.add_argument('--writing_depth_multiplier', type=int, default=1, help='writing depth multiplier')
 # parser.add_argument('--sum_loss', action='store_true', default=False,
 #                     help='with this flag task loss from all segments is summed')
 # parser.add_argument('--bptt_depth', type=int, default=-1, help='max number of previous segments in gradient computation.')
@@ -398,7 +401,7 @@ if __name__ == '__main__':
     # model.resize_token_embeddings(len(tokenizer))
 
     # Decide ARMT implementation
-    use_inner_armt = args.armt_impl in ['inner', 'mem_params']
+    use_inner_armt = args.armt_impl in ['inner', 'mem_params', 'thinking']
 
     # Optionally load backbone checkpoint
     backbone_state_dict = None
@@ -411,16 +414,22 @@ if __name__ == '__main__':
     if use_inner_armt:
         if args.num_mem_tokens is None:
             raise ValueError('--armt_impl inner/mem_params requires --num_mem_tokens to be set')
-        from modeling_amt.model import ARMTConfig
-        if args.armt_impl == 'inner':
-            from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
-            armt_model_cls = InnerLoopARMTForCausalLM
+        if args.armt_impl == 'thinking':
+            from modeling_amt.thinking import ThinkingARMTConfig, ThinkingARMTForCausalLM
+            armt_config_cls = ThinkingARMTConfig
+            armt_model_cls = ThinkingARMTForCausalLM
         else:
-            from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM
-            armt_model_cls = MemoryParamsARMTForCausalLM
+            from modeling_amt.model import ARMTConfig
+            if args.armt_impl == 'inner':
+                from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
+                armt_model_cls = InnerLoopARMTForCausalLM
+            else:
+                from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM
+                armt_model_cls = MemoryParamsARMTForCausalLM
+            armt_config_cls = ARMTConfig
 
         layers_attr = args.layers_attr if args.layers_attr is not None else 'model.layers'
-        armt_config = ARMTConfig(
+        armt_config = armt_config_cls(
             base_model_name=armt_base_model_name,
             base_model_config=armt_base_model_config,
             num_mem_tokens=args.num_mem_tokens,
@@ -431,6 +440,10 @@ if __name__ == '__main__':
             wrap_pos=args.wrap_pos,
             n_heads=1,
         )
+        if args.reading_depth_multiplier != 1:
+            armt_config.reading_depth_multiplier = args.reading_depth_multiplier
+        if args.writing_depth_multiplier != 1:
+            armt_config.writing_depth_multiplier = args.writing_depth_multiplier
         logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
         model = armt_model_cls(config=armt_config)
         logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
