@@ -12,6 +12,9 @@ from transformers.cache_utils import DynamicCache
 import warnings
 import copy
 
+# Reuse utilities from the existing implementation to ensure identical math
+from modeling_amt.utils import DPFP, invert_attn_mask, attn_mask_to_4d
+
 
 
 class ARMTConfig(PretrainedConfig):
@@ -88,9 +91,6 @@ except ImportError:
 except Exception as e:
     print("*** Can't import liger_kernel ***")
     raise e
-
-# Reuse utilities from the existing implementation to ensure identical math
-from modeling_amt.language_modeling import DPFP, invert_attn_mask, attn_mask_to_4d
 
 def reverse_invert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
     if os.environ.get("NOT_INVERT_ATTN_MASK"):
@@ -552,6 +552,7 @@ class MemoryParamsAssociativeLayerWrapper(nn.Module):
 
         if isinstance(layer_out, tuple):
             YELLOW = "\033[93m"
+            RESET = "\033[0m"
             if len(layer_out) == 1:
                 return (merged,)
             elif len(layer_out) == 2:

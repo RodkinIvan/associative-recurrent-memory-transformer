@@ -12,7 +12,7 @@ from transformers.cache_utils import DynamicCache
 import warnings
 
 # Reuse utilities from the existing implementation to ensure identical math
-from modeling_amt.language_modeling import DPFP, invert_attn_mask as _invert_attn_mask, attn_mask_to_4d
+from modeling_amt.utils import DPFP, invert_attn_mask, attn_mask_to_4d
 
 def reverse_invert_attn_mask(mask: torch.Tensor) -> torch.Tensor:
     if os.environ.get("NOT_INVERT_ATTN_MASK"):
@@ -38,8 +38,6 @@ def is_empty_past_key_values(past_key_values: Optional[DynamicCache], layer_idx:
     if past_key_values.layers[layer_idx].keys is None:
         return True
     return False
-
-invert_attn_mask = lambda mask, dtype: (_invert_attn_mask(mask, dtype) if not os.environ.get("NOT_INVERT_ATTN_MASK") else mask)
 
 def segment_tensor(t: torch.Tensor, start_idx: int, end_idx: int, seq_len: int) -> torch.Tensor:
     if not isinstance(t, torch.Tensor):
@@ -496,14 +494,15 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
 
         if isinstance(layer_out, tuple):
             YELLOW = "\033[93m"
+            RESET = "\033[0m"
             if len(layer_out) == 1:
                 return (merged,)
             elif len(layer_out) == 2:
                 warnings.warn(f"{YELLOW}Last attention was not tested for horizontal forward{RESET}")
-                return (merged, last_attn)
+                return (merged, None)
             elif len(layer_out) == 3:
                 warnings.warn(f"{YELLOW}Last attention and kv states were not tested for horizontal forward{RESET}")
-                return (merged, last_attn, present_kv)
+                return (merged, None, present_kv)
             else:
                 raise ValueError(f"Expected 1, 2 or 3 elements in layer output, got {len(layer_out)}")
         else:
