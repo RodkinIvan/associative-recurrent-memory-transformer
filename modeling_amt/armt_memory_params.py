@@ -17,7 +17,7 @@ from modeling_amt.utils import DPFP, invert_attn_mask, attn_mask_to_4d
 
 
 
-class ARMTConfig(PretrainedConfig):
+class MemParamsARMTConfig(PretrainedConfig):
     model_type = "armt"
 
     def __init__(self,
@@ -45,6 +45,7 @@ class ARMTConfig(PretrainedConfig):
                  constant_depth=False,
                  time_penalty=0.0,
                  wrap_layers=None,
+                 freeze_base_model=False,
                  **kwargs):
         super().__init__(**kwargs)
         # Validate mutual exclusivity
@@ -76,6 +77,7 @@ class ARMTConfig(PretrainedConfig):
         self.constant_depth = constant_depth
         self.time_penalty = time_penalty
         self.wrap_layers = wrap_layers
+        self.freeze_base_model = freeze_base_model
     def get(self, attr: str, default=None):
         if hasattr(self, attr):
             return getattr(self, attr)
@@ -596,9 +598,9 @@ class MemoryParamsARMTForCausalLM(PreTrainedModel):
     """
 
     # Reuse the config used by the outer-loop variant for parity
-    config_class = ARMTConfig
+    config_class = MemParamsARMTConfig
 
-    def __init__(self, config: ARMTConfig, **kwargs):
+    def __init__(self, config: MemParamsARMTConfig, **kwargs):
         global LIGER_KERNEL_AVAILABLE
         super().__init__(config, **kwargs)
         from transformers import AutoConfig, AutoModelForCausalLM
@@ -664,6 +666,7 @@ class MemoryParamsARMTForCausalLM(PreTrainedModel):
         self.use_sink = bool(getattr(config, "use_sink", False))
         self.sliding_window = bool(getattr(config, "sliding_window", False))
 
+        self.freeze_base_model_flag = bool(getattr(config, "freeze_base_model", False))
         # Shared trainable memory embeddings (used by all layers)
         emb = self.model.get_input_embeddings()
         d_model = emb.embedding_dim
@@ -726,11 +729,20 @@ class MemoryParamsARMTForCausalLM(PreTrainedModel):
                 if self.wrap_layers[i]:
                     layer.freeze_mem()
 
-
         # Expose convenience accessor
         self.get_layers = lambda: _get_layers_from_model(self.model)
 
         self.vertical_mode = False
+
+        if self.freeze_base_model_flag:
+            self.freeze_base_model()
+    
+    def freeze_base_model(self):
+        for p in self.model.parameters():
+            p.requires_grad = False
+        for l in self.get_layers():
+            for p in l.mem_layer.parameters():
+                p.requires_grad = True
 
     # ----- control helpers -----
     def generate_mode(self, is_on: bool):

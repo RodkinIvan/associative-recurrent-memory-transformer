@@ -141,6 +141,7 @@ parser.add_argument('--streaming', action='store_true', default=False, help='use
 parser.add_argument('--stream_chunk_docs', type=int, default=5000, help='number of raw samples per streaming tokenization chunk')
 parser.add_argument('--alternate_layers', action='store_true', default=False,
                     help='If set, wrap alternating transformer layers (1,0,1,0,...) in ARMT')
+parser.add_argument('--freeze_base_model', action='store_true', default=False)
 os.environ['HF_Trainer'] = '1'
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -950,7 +951,20 @@ if __name__ == '__main__':
             wrap_layers_arg = [1 if (i % 2 == 0) else 0 for i in range(n_layers)]
 
         # Create ARMT config
-        armt_config = ARMTConfig(
+        
+
+        # Create ARMT model (outer vs inner loop)
+        if args.armt_impl == 'inner':
+            armt_model_cls = InnerLoopARMTForCausalLM
+            armt_config_cls = ARMTConfig
+        elif args.armt_impl == 'mem_params':
+            from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM, MemParamsARMTConfig
+            armt_config_cls = MemParamsARMTConfig
+            armt_model_cls = MemoryParamsARMTForCausalLM
+        else:
+            armt_model_cls = ARMTForCausalLM
+            armt_config_cls = ARMTConfig
+        armt_config = armt_config_cls(
             base_model_name=args.from_pretrained,
             num_mem_tokens=args.num_mem_tokens,
             d_mem=args.d_mem if args.d_mem is not None else 512,
@@ -972,16 +986,8 @@ if __name__ == '__main__':
             act_type="associative",
             time_penalty=0.0
         )
-
-        # Create ARMT model (outer vs inner loop)
-        if args.armt_impl == 'inner':
-            armt_model_cls = InnerLoopARMTForCausalLM
-        elif args.armt_impl == 'mem_params':
-            from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM
-            armt_model_cls = MemoryParamsARMTForCausalLM
-        else:
-            armt_model_cls = ARMTForCausalLM
-
+        if args.armt_impl =='mem_params' and args.freeze_base_model:
+            armt_config.freeze_base_model = args.freeze_base_model
         ## load cpt of ARMT
         if args.model_cpt and args.model_cpt != 'None':
             logger.info(f'Loading ARMT checkpoint from: {args.model_cpt}')
