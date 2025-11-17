@@ -8,7 +8,8 @@ from torch.nn.functional import relu as r
 import torch.nn.functional as F
 import os
 
-from modeling_amt.language_modeling import AssociativeMemoryCell, AssociativeRecurrentWrapper, attn_mask_to_4d, invert_attn_mask
+from modeling_amt.language_modeling import AssociativeMemoryCell, AssociativeRecurrentWrapper
+from modeling_amt.utils import attn_mask_to_4d, invert_attn_mask
 
 
 class ARMTConfig(PretrainedConfig):
