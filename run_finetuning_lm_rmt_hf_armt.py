@@ -135,7 +135,7 @@ parser.add_argument('--layers_attr', type=str, default=None, help='attribute of 
 
 parser.add_argument('--prev_seg_kv', action='store_true', default=False, help='propagate kv from previous segment')
 parser.add_argument('--use_sink', action='store_true', default=False, help='use_attention_sink_token')
-parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params'], default='outer',
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params', 'thinking'], default='outer',
                     help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 parser.add_argument('--streaming', action='store_true', default=False, help='use streaming dataset')
 parser.add_argument('--stream_chunk_docs', type=int, default=5000, help='number of raw samples per streaming tokenization chunk')
@@ -1029,15 +1029,26 @@ if __name__ == '__main__':
                 logger.info("="*80)
     
     # Import DeepSpeed callback for handling ZeRO-3 checkpoint consolidation
-    from deepspeed_push_callback import DeepSpeedCheckpointCallback
+    from deepspeed_push_callback import DeepSpeedCheckpointCallback, PushToHubCallback
     
     # Determine the model class name for Hub pushing
-    model_class_name = "InnerLoopARMTForCausalLM" if args.armt_impl == 'inner' else "ARMTForCausalLM"
+    if args.armt_impl == 'inner':
+        model_class_name = "InnerLoopARMTForCausalLM"
+    elif args.armt_impl == 'mem_params':
+        model_class_name = "MemoryParamsARMTForCausalLM"
+    elif args.armt_impl == 'thinking':
+        model_class_name = "ThinkingARMTForCausalLM"
+    else:
+        model_class_name = "ARMTForCausalLM"
     
     # Create callbacks
     dataset_stats_callback = DatasetStatsCallback(train_dataset, expected_tokens)
     deepspeed_callback = DeepSpeedCheckpointCallback(
         consolidate_on_save=training_args.push_to_hub,
+        modeling_code_dir=os.path.join(args.working_dir, "modeling_amt"),
+        model_class_name=model_class_name if args.num_mem_tokens is not None else None
+    )
+    push_to_hub_callback = PushToHubCallback(
         modeling_code_dir=os.path.join(args.working_dir, "modeling_amt"),
         model_class_name=model_class_name if args.num_mem_tokens is not None else None
     )
@@ -1050,7 +1061,7 @@ if __name__ == '__main__':
         # test_dataset=test_dataset,
         # compute_metrics=compute_metrics,
         data_collator=collate_fn,
-        callbacks=[dataset_stats_callback, deepspeed_callback],
+        callbacks=[dataset_stats_callback, deepspeed_callback, push_to_hub_callback],
     )
 
 

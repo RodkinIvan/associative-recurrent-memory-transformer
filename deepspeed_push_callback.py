@@ -108,24 +108,7 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
                 import traceback
                 traceback.print_exc()
         
-        # Inline custom modeling code if pushing to Hub
-        if args.push_to_hub:
-            try:
-                self._inline_modeling_code(checkpoint_folder)
-                logger.info(f"✓ Successfully inlined custom modeling code")
-            except Exception as e:
-                logger.warning(f"Failed to inline modeling code (checkpoint will still work, but may need local code): {e}")
-                import traceback
-                traceback.print_exc()
-            
-            # Copy tokenizer files to checkpoint directory
-            try:
-                self._copy_tokenizer_files(checkpoint_folder, args)
-                logger.info(f"✓ Successfully copied tokenizer files")
-            except Exception as e:
-                logger.warning(f"Failed to copy tokenizer files (may need to load tokenizer separately): {e}")
-                import traceback
-                traceback.print_exc()
+        # Note: inlining code and pushing to hub are handled by PushToHubCallback
         
         # Log final state of checkpoint directory
         try:
@@ -163,20 +146,67 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
         except Exception as e:
             logger.warning(f"Could not verify checkpoint files: {e}")
         
-        # Manually push the consolidated checkpoint to Hub
-        if args.push_to_hub:
-            logger.info("Manually pushing consolidated checkpoint to Hub...")
-            self._push_checkpoint_to_hub(
-                checkpoint_folder, 
-                args,
-                commit_message=f"Training checkpoint at step {state.global_step}"
-            )
+        # Note: Hub push is handled by PushToHubCallback
         
         logger.info(f"="*80)
         
         # Track that we consolidated this checkpoint
         self.last_consolidated_checkpoint = checkpoint_folder
         
+        return control
+    
+class PushToHubCallback(TrainerCallback):
+    """
+    Callback to inline modeling code and push checkpoints to the Hub.
+    Works with or without DeepSpeed.
+    """
+    def __init__(self, modeling_code_dir=None, model_class_name=None):
+        self.modeling_code_dir = Path(modeling_code_dir) if modeling_code_dir else None
+        self.model_class_name = model_class_name
+        self.last_pushed_checkpoint = None
+    
+    def on_save(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        # Only run on main process
+        if not args.should_save:
+            return control
+        if not args.push_to_hub:
+            return control
+        
+        checkpoint_folder = os.path.join(
+            args.output_dir,
+            f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}"
+        )
+        logger.info(f"PushToHubCallback.on_save() called for checkpoint: {checkpoint_folder}")
+        if not os.path.exists(checkpoint_folder):
+            logger.warning(f"Checkpoint folder {checkpoint_folder} not found, skipping push")
+            return control
+        
+        # Inline modeling code
+        try:
+            self._inline_modeling_code(checkpoint_folder)
+            logger.info(f"✓ Successfully inlined custom modeling code")
+        except Exception as e:
+            logger.warning(f"Failed to inline modeling code (checkpoint will still work, but may need local code): {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Copy tokenizer files
+        try:
+            self._copy_tokenizer_files(checkpoint_folder, args)
+            logger.info(f"✓ Successfully copied tokenizer files")
+        except Exception as e:
+            logger.warning(f"Failed to copy tokenizer files (may need to load tokenizer separately): {e}")
+            import traceback
+            traceback.print_exc()
+        
+        # Push to Hub
+        logger.info("Manually pushing checkpoint to Hub...")
+        self._push_checkpoint_to_hub(
+            checkpoint_folder, 
+            args,
+            commit_message=f"Training checkpoint at step {state.global_step}"
+        )
+        self.last_pushed_checkpoint = checkpoint_folder
         return control
     
     def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
@@ -195,8 +225,8 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
                 f"{PREFIX_CHECKPOINT_DIR}-{state.global_step}"
             )
             
-            # If this checkpoint exists and was consolidated, verify files before push
-            if os.path.exists(checkpoint_folder) and checkpoint_folder == self.last_consolidated_checkpoint:
+            # If this checkpoint exists, verify key files before push
+            if os.path.exists(checkpoint_folder):
                 logger.info(f"[Pre-push verification] Checking checkpoint before Hub push: {checkpoint_folder}")
                 
                 import glob
@@ -594,12 +624,15 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
         
         logger.info(f"Inlining modeling code from {modeling_dir}")
         
-        # Read all ARMT modeling files
+        # Read all ARMT modeling files (support outer, inner, mem_params, thinking)
         files_to_inline = {
+            "utils.py": modeling_dir / "utils.py",
             "act_utils.py": modeling_dir / "act_utils.py",
             "language_modeling.py": modeling_dir / "language_modeling.py",
             "model.py": modeling_dir / "model.py",
             "inner_loop.py": modeling_dir / "inner_loop.py",
+            "armt_memory_params.py": modeling_dir / "armt_memory_params.py",
+            "thinking.py": modeling_dir / "thinking.py",
         }
         
         # Read and process each file
@@ -615,6 +648,10 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
             code = code.replace("from modeling_amt.act_utils import", "# inlined act_utils: removed import")
             code = code.replace("from modeling_amt.language_modeling import", "# inlined language_modeling: removed import")
             code = code.replace("from modeling_amt.model import ARMTConfig", "# inlined ARMTConfig: removed import")
+            code = code.replace("from modeling_amt.utils import", "# inlined utils: removed import")
+            code = code.replace("from modeling_amt.inner_loop import", "# inlined inner_loop: removed import")
+            code = code.replace("from modeling_amt.armt_memory_params import", "# inlined armt_memory_params: removed import")
+            code = code.replace("from modeling_amt.thinking import", "# inlined thinking: removed import")
             
             code_sections.append(f"# ---- {name} ----\n{code}\n")
         
@@ -641,14 +678,26 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
                 if "architectures" in config and config["architectures"]:
                     model_class = config["architectures"][0]
                 else:
-                    # Default to InnerLoopARMTForCausalLM
-                    model_class = "InnerLoopARMTForCausalLM"
+                    # Default to outer-loop ARMT
+                    model_class = "ARMTForCausalLM"
                     logger.info(f"Using default model class: {model_class}")
             
             # Update config with auto_map
             config["architectures"] = [model_class]
+            # Select correct Config class for the given model class
+            if model_class in ("ARMTForCausalLM", "InnerLoopARMTForCausalLM"):
+                cfg_class = "ARMTConfig"
+            elif model_class == "MemoryParamsARMTForCausalLM":
+                cfg_class = "MemParamsARMTConfig"
+            elif model_class == "ThinkingARMTForCausalLM":
+                cfg_class = "ThinkingARMTConfig"
+            else:
+                # Fallback to ARMTConfig
+                cfg_class = "ARMTConfig"
+                logger.warning(f"Unknown model class '{model_class}', defaulting AutoConfig to {cfg_class}")
+
             config["auto_map"] = {
-                "AutoConfig": "modeling_armt.ARMTConfig",
+                "AutoConfig": f"modeling_armt.{cfg_class}",
                 "AutoModelForCausalLM": f"modeling_armt.{model_class}",
             }
             
@@ -766,6 +815,9 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
                 # Extract repo name from output_dir (last component)
                 output_path = Path(args.output_dir)
                 repo_name = output_path.name
+                # Prefix with model class if available → {ModelClass}_run_$N
+                if self.model_class_name:
+                    repo_name = f"{self.model_class_name}_{repo_name}"
                 
                 # Try to get username from HF token or use 'user'
                 try:
@@ -776,7 +828,7 @@ class DeepSpeedCheckpointCallback(TrainerCallback):
                     logger.warning(f"Could not get HF username, using: {username}")
                 
                 repo_id = f"{username}/{repo_name}"
-                logger.info(f"Derived repo_id from output_dir: {repo_id}")
+                logger.info(f"Derived repo_id from output_dir and model class: {repo_id}")
             else:
                 logger.error("Cannot determine Hub repo ID - hub_model_id not set and output_dir not available")
                 logger.error(f"Available args: push_to_hub={args.push_to_hub}, output_dir={args.output_dir}")
