@@ -44,6 +44,8 @@ class ThinkingARMTConfig(PretrainedConfig):
                  wrap_layers=None,
                  reading_depth_multiplier=1,
                  writing_depth_multiplier=1,
+                 repeat_read_segments=1,
+                 repeat_write_segments=1,
                  **kwargs):
         super().__init__(**kwargs)
         # Validate mutual exclusivity
@@ -77,6 +79,8 @@ class ThinkingARMTConfig(PretrainedConfig):
         self.wrap_layers = wrap_layers
         self.reading_depth_multiplier = reading_depth_multiplier
         self.writing_depth_multiplier = writing_depth_multiplier
+        self.repeat_read_segments = repeat_read_segments
+        self.repeat_write_segments = repeat_write_segments
     def get(self, attr: str, default=None):
         if hasattr(self, attr):
             return getattr(self, attr)
@@ -674,6 +678,8 @@ class ThinkingARMTForCausalLM(PreTrainedModel):
         self.sliding_window = bool(getattr(config, "sliding_window", False))
         self.reading_depth_multiplier = int(getattr(config, "reading_depth_multiplier", 1))
         self.writing_depth_multiplier = int(getattr(config, "writing_depth_multiplier", 1))
+        self.repeat_read_segments = int(getattr(config, "repeat_read_segments", 1))
+        self.repeat_write_segments = int(getattr(config, "repeat_write_segments", 1))
         # Shared trainable memory embeddings (used by all layers)
         emb = self.model.get_input_embeddings()
         d_model = emb.embedding_dim
@@ -1013,20 +1019,24 @@ class ThinkingARMTForCausalLM(PreTrainedModel):
 
             if seg_idx < first_labels_segment - 1:
                 self.set_depth_multiplier(self.writing_depth_multiplier)
+                repeat_segments = self.repeat_write_segments
             elif seg_idx == first_labels_segment - 1:
                 self.set_depth_multiplier(self.reading_depth_multiplier)
+                repeat_segments = self.repeat_read_segments
             else:
                 self.set_depth_multiplier(1)
-            out = self.model(
-                input_ids=seg.get("input_ids"),
-                inputs_embeds=seg.get("inputs_embeds"),
-                attention_mask=cur4d,
-                position_ids=position_ids,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                use_cache=use_sliding,
-                past_key_values=shared_cache if use_sliding else None,
-            )
+                repeat_segments = 1
+            for _ in range(repeat_segments):
+                out = self.model(
+                    input_ids=seg.get("input_ids"),
+                    inputs_embeds=seg.get("inputs_embeds"),
+                    attention_mask=cur4d,
+                    position_ids=position_ids,
+                    output_attentions=output_attentions,
+                    output_hidden_states=output_hidden_states,
+                    use_cache=use_sliding,
+                    past_key_values=shared_cache if use_sliding else None,
+                )
             if os.environ.get("ARMT_DEBUG_SW"):
                 print(f"[V-SEG] seg_len={seg_len} cur4d={tuple(cur4d.shape)} pos=({int(position_ids[0,0])},{int(position_ids[0,-1])})")
                 if hasattr(out, 'past_key_values') and out.past_key_values is not None:
