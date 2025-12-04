@@ -113,13 +113,20 @@ This folder contains several Hugging Face compatible variants of the Associative
   ```
 
 ## Push to the Hugging Face Hub and load back
-- Use the trainer callback from `deepspeed_push_callback.py` to inline any ARMT implementation (outer/inner/mem-params/thinking) and push with `trust_remote_code=True`:
+- Use the trainer callback from `deepspeed_push_callback.py` to inline any ARMT implementation (outer/inner/mem-params/thinking) and push with `trust_remote_code=True` (same pattern as `run_finetuning_lm_rmt_hf_armt.py`):
   ```python
   from transformers import Trainer, TrainingArguments
   from deepspeed_push_callback import PushToHubCallback
   from modeling_amt.inner_loop import ARMTConfig, InnerLoopARMTForCausalLM  # swap module/class for other variants
 
-  model_class = "InnerLoopARMTForCausalLM"  # or ARMTForCausalLM, MemoryParamsARMTForCausalLM, ThinkingARMTForCausalLM
+  armt_impl = "inner"  # one of: "outer" (default), "inner", "mem_params", "thinking"
+  model_class_by_impl = {
+      "outer": "ARMTForCausalLM",
+      "inner": "InnerLoopARMTForCausalLM",
+      "mem_params": "MemoryParamsARMTForCausalLM",
+      "thinking": "ThinkingARMTForCausalLM",
+  }
+  model_class = model_class_by_impl[armt_impl]
   cfg = ARMTConfig(base_model_name="meta-llama/Llama-3-1b")
   model = InnerLoopARMTForCausalLM(cfg)
 
