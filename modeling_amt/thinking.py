@@ -46,6 +46,7 @@ class ThinkingARMTConfig(PretrainedConfig):
                  writing_depth_multiplier=1,
                  repeat_read_segments=1,
                  repeat_write_segments=1,
+                 split_before_labels=False,
                  **kwargs):
         super().__init__(**kwargs)
         # Validate mutual exclusivity
@@ -81,6 +82,10 @@ class ThinkingARMTConfig(PretrainedConfig):
         self.writing_depth_multiplier = writing_depth_multiplier
         self.repeat_read_segments = repeat_read_segments
         self.repeat_write_segments = repeat_write_segments
+
+        if not split_before_labels:
+            assert self.repeat_read_segments == self.repeat_write_segments, "repeat_read_segments and repeat_write_segments must be the same if split_before_labels is False"
+        self.split_before_labels = split_before_labels
     def get(self, attr: str, default=None):
         if hasattr(self, attr):
             return getattr(self, attr)
@@ -680,6 +685,7 @@ class ThinkingARMTForCausalLM(PreTrainedModel):
         self.writing_depth_multiplier = int(getattr(config, "writing_depth_multiplier", 1))
         self.repeat_read_segments = int(getattr(config, "repeat_read_segments", 1))
         self.repeat_write_segments = int(getattr(config, "repeat_write_segments", 1))
+        self.split_before_labels = bool(getattr(config, "split_before_labels", False))
         # Shared trainable memory embeddings (used by all layers)
         emb = self.model.get_input_embeddings()
         d_model = emb.embedding_dim
@@ -843,6 +849,8 @@ class ThinkingARMTForCausalLM(PreTrainedModel):
             starts.append(start)
             if start < labels_start and start + self.segment_size >= labels_start:
                 first_labels_segment = len(starts)
+                if not self.split_before_labels:
+                    continue
                 for start in range(labels_start, hidden_states.size(1), self.segment_size):
                     starts.append(start)
                 break
