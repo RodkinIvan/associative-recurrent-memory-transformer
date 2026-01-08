@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=1,2,3,4
-NP=4 # ./test_bert_sparse_pretrain_train_valid.sh
+export CUDA_VISIBLE_DEVICES=0
+NP=1 # ./test_bert_sparse_pretrain_train_valid.sh
 set -e
 cd ../..
 
@@ -11,22 +11,20 @@ MODEL_TYPE=decoder
 MEMORY_CELL=modeling_amt.language_modeling:AssociativeMemoryCell
 RECURRENT_WRAPPER=modeling_amt.language_modeling:AssociativeRecurrentWrapper
 BACKBONE_CLS=transformers:AutoModelForCausalLM
-TEACHER_CLS=transformers:AutoModelForCausalLM
 TASK_NAME=wikitext-103-v1
 
 ITERS=36000
-TBS=32
+TBS=64
 
-MAX_N_SEGMENTSS=(8)
-MAX_VAL_SEGMENTSS=(15)
-MEMORY_SIZES=(16)
+MAX_N_SEGMENTSS=(2)
+MAX_VAL_SEGMENTSS=(2)
+MEMORY_SIZES=(8)
 INPUT_TOKENS=128
 LRS=(1e-4)
-MODEL=XXXX/gpt2-wiki103
-BSS=(1)
+MODEL=gpt2
+BSS=(32)
 
-TEACHER=XXXX/gpt2-wiki103
-D_MEM=96
+D_MEM=64
 N_HEADS=1
 
 
@@ -103,7 +101,8 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --save_best \
         --tokenizer 'openai-community/gpt2' \
         --d_mem $D_MEM \
-        --n_heads $N_HEADS
+        --n_heads $N_HEADS \
+        --layers_attr transformer.h
 done
 done
 done

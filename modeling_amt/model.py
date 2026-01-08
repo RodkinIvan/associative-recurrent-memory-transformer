@@ -82,6 +82,7 @@ class ARMTForCausalLM(PreTrainedModel):
     config_class = ARMTConfig
 
     def __init__(self, config: ARMTConfig, **kwargs):
+        os.environ['HF_Trainer'] = '1'
         super().__init__(config, **kwargs)
         from transformers import AutoConfig, AutoModelForCausalLM
         
