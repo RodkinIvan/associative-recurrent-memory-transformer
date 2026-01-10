@@ -993,17 +993,48 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                 **kwargs  # Added to handle any other unexpected kwargs
                 ):
         if input_segmented:
-            n_segs = input_ids.shape[1] if not (input_ids is None) else inputs_embeds.shape[1]
-            segmented = [dict(
-                input_ids=input_ids[:, i] if not (input_ids is None) else None, 
-                inputs_embeds=inputs_embeds[:, i] if not (inputs_embeds is None) else None, 
-                attention_mask=attention_mask[:, i],
-                labels=labels[:, i] if not (labels is None) else None, 
-                labels_mask=labels_mask[:, i] if not (labels_mask is None) else None, 
-            ) for i in range(n_segs)]
-            labels = torch.cat([labels[:, i] for i in range(n_segs)], dim=1)
-            if labels_mask is not None:
-                labels_mask = torch.cat([labels_mask[:, i] for i in range(n_segs)], dim=1)
+            # Support passing already-segmented inputs either as:
+            # - lists/tuples of tensors: [(bsz, seg_len_i), ...]  [new behavior]
+            def _is_seq(x):
+                return isinstance(x, (list, tuple))
+
+            # List/tuple of segments: segment_size is ignored.
+            if input_ids is None and inputs_embeds is None:
+                raise ValueError("When input_segmented=True, either input_ids or inputs_embeds must be provided.")
+            if not (_is_seq(input_ids) or _is_seq(inputs_embeds)):
+                raise TypeError(
+                    "When input_segmented=True, input_ids/inputs_embeds must be provided as a list/tuple of segments "
+                    "(each segment tensor shaped (bsz, seq_len) for input_ids or (bsz, seq_len, d) for inputs_embeds)."
+                )
+            if attention_mask is None:
+                raise ValueError("When input_segmented=True, attention_mask must be a list/tuple with one tensor per segment.")
+
+            n_segs = len(input_ids) if _is_seq(input_ids) else len(inputs_embeds)
+            if _is_seq(input_ids) and len(input_ids) != n_segs:
+                raise ValueError("input_ids must have one tensor per segment.")
+            if _is_seq(inputs_embeds) and len(inputs_embeds) != n_segs:
+                raise ValueError("inputs_embeds must have one tensor per segment.")
+            if not _is_seq(attention_mask) or len(attention_mask) != n_segs:
+                raise ValueError("attention_mask must be a list/tuple with the same number of segments as input_ids/inputs_embeds.")
+            if labels is not None and (not _is_seq(labels) or len(labels) != n_segs):
+                raise ValueError("labels must be a list/tuple with the same number of segments when input_segmented=True.")
+            if labels_mask is not None and (not _is_seq(labels_mask) or len(labels_mask) != n_segs):
+                raise ValueError("labels_mask must be a list/tuple with the same number of segments when input_segmented=True.")
+
+            segmented = []
+            for i in range(n_segs):
+                segmented.append(dict(
+                    input_ids=input_ids[i] if _is_seq(input_ids) else None,
+                    inputs_embeds=inputs_embeds[i] if _is_seq(inputs_embeds) else None,
+                    attention_mask=attention_mask[i],
+                    labels=labels[i] if _is_seq(labels) else None,
+                    labels_mask=labels_mask[i] if _is_seq(labels_mask) else None,
+                ))
+
+            if _is_seq(labels):
+                labels = torch.cat(list(labels), dim=1)
+            if _is_seq(labels_mask):
+                labels_mask = torch.cat(list(labels_mask), dim=1)
         else:
             segmented = self.segment(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels, labels_mask=labels_mask)
         
@@ -1017,7 +1048,9 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
         next_seg_kwargs = dict(state=state)
         for seg_num, segment in enumerate(segmented):
             if seg_num != len(segmented) - 1:
-                next_seg_len = segmented[seg_num + 1]['input_ids'].size(-1)
+                next_seg_ids = segmented[seg_num + 1].get('input_ids')
+                next_seg_emb = segmented[seg_num + 1].get('inputs_embeds')
+                next_seg_len = next_seg_ids.size(-1) if next_seg_ids is not None else next_seg_emb.size(-2)
             else:
                 next_seg_len = None
             # Pass num_items_in_batch to segment processing

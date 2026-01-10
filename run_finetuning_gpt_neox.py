@@ -501,6 +501,7 @@ if __name__ == '__main__':
         fwd_kwargs['output_only_last_segment'] = True
     if 'armt' in args.model_path and args.dataset_name != 'ca':
         fwd_kwargs['input_segmented'] = True
+        raise Exception("This input_segmented format is not supported anymore.")
     trainer = Trainer(
         args, accelerator, model, optimizer, train_dataloader, valid_dataloader,
         keep_for_metrics_fn=keep_for_metrics_fn,
