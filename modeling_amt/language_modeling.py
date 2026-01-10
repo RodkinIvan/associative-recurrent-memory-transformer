@@ -1016,10 +1016,36 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                 raise ValueError("inputs_embeds must have one tensor per segment.")
             if not _is_seq(attention_mask) or len(attention_mask) != n_segs:
                 raise ValueError("attention_mask must be a list/tuple with the same number of segments as input_ids/inputs_embeds.")
-            if labels is not None and (not _is_seq(labels) or len(labels) != n_segs):
-                raise ValueError("labels must be a list/tuple with the same number of segments when input_segmented=True.")
-            if labels_mask is not None and (not _is_seq(labels_mask) or len(labels_mask) != n_segs):
-                raise ValueError("labels_mask must be a list/tuple with the same number of segments when input_segmented=True.")
+            # labels / labels_mask can be provided either segmented (list/tuple) or concatenated (tensor).
+            seg_lens = [am.size(-1) for am in attention_mask]
+            if labels is not None and not (_is_seq(labels) or isinstance(labels, torch.Tensor)):
+                raise TypeError("labels must be either a list/tuple of segments or a concatenated torch.Tensor when input_segmented=True.")
+            if labels_mask is not None and not (_is_seq(labels_mask) or isinstance(labels_mask, torch.Tensor)):
+                raise TypeError("labels_mask must be either a list/tuple of segments or a concatenated torch.Tensor when input_segmented=True.")
+
+            labels_segs = None
+            labels_mask_segs = None
+            if isinstance(labels, torch.Tensor):
+                if labels.size(1) != sum(seg_lens):
+                    raise ValueError(
+                        f"Concatenated labels must have seq_len={sum(seg_lens)} (sum of segment lengths), got {labels.size(1)}."
+                    )
+                labels_segs = list(torch.split(labels, seg_lens, dim=1))
+            elif _is_seq(labels):
+                if len(labels) != n_segs:
+                    raise ValueError("labels must have the same number of segments as input_ids/inputs_embeds when input_segmented=True.")
+                labels_segs = list(labels)
+
+            if isinstance(labels_mask, torch.Tensor):
+                if labels_mask.size(1) != sum(seg_lens):
+                    raise ValueError(
+                        f"Concatenated labels_mask must have seq_len={sum(seg_lens)} (sum of segment lengths), got {labels_mask.size(1)}."
+                    )
+                labels_mask_segs = list(torch.split(labels_mask, seg_lens, dim=1))
+            elif _is_seq(labels_mask):
+                if len(labels_mask) != n_segs:
+                    raise ValueError("labels_mask must have the same number of segments as input_ids/inputs_embeds when input_segmented=True.")
+                labels_mask_segs = list(labels_mask)
 
             segmented = []
             for i in range(n_segs):
@@ -1027,14 +1053,14 @@ class AssociativeRecurrentWrapper(torch.nn.Module):
                     input_ids=input_ids[i] if _is_seq(input_ids) else None,
                     inputs_embeds=inputs_embeds[i] if _is_seq(inputs_embeds) else None,
                     attention_mask=attention_mask[i],
-                    labels=labels[i] if _is_seq(labels) else None,
-                    labels_mask=labels_mask[i] if _is_seq(labels_mask) else None,
+                    labels=labels_segs[i] if labels_segs is not None else None,
+                    labels_mask=labels_mask_segs[i] if labels_mask_segs is not None else None,
                 ))
 
-            if _is_seq(labels):
-                labels = torch.cat(list(labels), dim=1)
-            if _is_seq(labels_mask):
-                labels_mask = torch.cat(list(labels_mask), dim=1)
+            if labels_segs is not None and not isinstance(labels, torch.Tensor):
+                labels = torch.cat(labels_segs, dim=1)
+            if labels_mask_segs is not None and not isinstance(labels_mask, torch.Tensor):
+                labels_mask = torch.cat(labels_mask_segs, dim=1)
         else:
             segmented = self.segment(input_ids=input_ids, inputs_embeds=inputs_embeds, attention_mask=attention_mask, labels=labels, labels_mask=labels_mask)
         
