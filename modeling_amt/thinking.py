@@ -414,8 +414,11 @@ class ThinkingAssociativeLayerWrapper(nn.Module):
                 rest = layer_out[1:]
             else:
                 hidden_states = layer_out
-                rest = tuple()
-        return hidden_states, *rest
+                rest = None
+        if rest is not None:
+            return hidden_states, *rest
+        else:
+            return hidden_states
 
     
     # ----- main forward (inner-loop segmentation) -----
