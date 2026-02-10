@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from transformers.modeling_outputs import ModelOutput
 from modeling_amt.utils import DPFP
 
+from modeling_amt.utils import attn_mask_to_4d, invert_attn_mask
+
 @dataclass
 class ARMTOutput(ModelOutput):
     """
@@ -92,6 +94,20 @@ class AssociativeLayerWrapper(torch.nn.Module):
         self.correction = correction
         
         self.zero_mem()
+
+    def __getattr__(self, name: str):
+        """Delegate attribute access to the wrapped layer if not found in wrapper."""
+        # First let nn.Module try to find the attribute (in _modules, _parameters, _buffers)
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            pass
+        # Then delegate to the wrapped layer
+        try:
+            layer = super().__getattr__('layer')
+            return getattr(layer, name)
+        except AttributeError:
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
     def _to_heads(self, x):
         bsz, seq_len, d_model = x.shape

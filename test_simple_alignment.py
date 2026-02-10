@@ -2,31 +2,37 @@
 """
 Simple test to verify alignment between generate and forward methods.
 """
+import os
 
+os.environ["ARMT_DISABLE_LIGER_KERNEL"] = "1"
 import torch
 from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
-from modeling_amt.model import ARMTConfig
+from modeling_amt.inner_loop import ARMTConfig
+
+device = torch.device("cuda:0")
 
 def main():
     print("Loading inner-loop ARMT model...")
     
     # Create a simple config
     config = ARMTConfig()
-    config.base_model_name = 'meta-llama/Llama-3.2-1B'
+    # config.base_model_name = 'meta-llama/Llama-3.2-1B'
+    config.base_model_name = 'google/gemma-3-1b-it'
     config.num_mem_tokens = 4
     config.d_mem = 4
     config.segment_size = 5
-    config.sliding_window = True
-    config.use_sink = True
+    config.sliding_window = False
+    config.use_sink = False
     
     # Create model
     model = InnerLoopARMTForCausalLM(config)
     for layer in model.get_layers():
         torch.nn.init.normal_(layer.W_mv.weight, mean=0.0, std=0.02)
+    model.to(device)
     model.eval()
     
     # Simple test input
-    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7]], dtype=torch.long)
+    input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7]], dtype=torch.long, device=device)
     attention_mask = torch.ones_like(input_ids)
     
     print(f"Input shape: {input_ids.shape}")
