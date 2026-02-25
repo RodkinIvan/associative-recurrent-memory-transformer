@@ -142,6 +142,9 @@ parser.add_argument('--stream_chunk_docs', type=int, default=5000, help='number 
 parser.add_argument('--alternate_layers', action='store_true', default=False,
                     help='If set, wrap alternating transformer layers (1,0,1,0,...) in ARMT')
 parser.add_argument('--freeze_base_model', action='store_true', default=False)
+parser.add_argument('--model_dtype', type=str, default='bfloat16', help='model dtype')
+parser.add_argument('--memory_dtype', type=str, default='bfloat16', help='memory dtype')
+
 os.environ['HF_Trainer'] = '1'
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -161,7 +164,7 @@ if __name__ == '__main__':
     training_args_dict['per_device_eval_batch_size'] = training_args_dict.get('per_device_train_batch_size') # // 2
     training_args_dict['eval_accumulation_steps'] = training_args_dict['gradient_accumulation_steps']
     # print("="*20, training_args_dict['gradient_accumulation_steps'], "="*20)
-    if args.d_mem is None:
+    if args.d_mem is None or not args.prev_seg_kv:
         # for now, gradient checkpointing is not supported for ARMT
         training_args_dict['gradient_checkpointing'] = True
     else:
@@ -915,14 +918,15 @@ if __name__ == '__main__':
     ## load cpt of backbone model
     if args.backbone_cpt:
         cpt = torch.load(args.backbone_cpt, map_location='cpu')
-        model.load_state_dict(cpt['model_state_dict'], strict=False)
+        model.load_state_dict(cpt['model_state_dict'], strict=True)
         logger.info(f'Loaded baseline state dict from: {args.backbone_cpt}')
 
     # Use HF-compatible ARMT instead of original RMT classes
     if args.num_mem_tokens is not None:
-        from modeling_amt.model import ARMTConfig, ARMTForCausalLM
+        if args.armt_impl == 'outer':
+            from modeling_amt.model import ARMTConfig, ARMTForCausalLM
         if args.armt_impl == 'inner':
-            from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
+            from modeling_amt.inner_loop_old import InnerLoopARMTForCausalLM, ARMTConfig
 
         logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
 
@@ -984,7 +988,9 @@ if __name__ == '__main__':
             act_on=False,
             max_hop=4,
             act_type="associative",
-            time_penalty=0.0
+            time_penalty=0.0,
+            model_dtype=args.model_dtype,
+            memory_dtype=args.memory_dtype
         )
         if args.armt_impl =='mem_params' and args.freeze_base_model:
             armt_config.freeze_base_model = args.freeze_base_model
@@ -998,8 +1004,8 @@ if __name__ == '__main__':
             logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
 
 
-    
-    # args.gradient_checkpointing = True
+    if not args.prev_seg_kv:
+        training_args.gradient_checkpointing = True
     print("="*20, training_args.deepspeed, "="*20)
 
     training_args.bf16 = True
