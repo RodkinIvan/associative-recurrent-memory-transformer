@@ -39,9 +39,13 @@ def is_empty_past_key_values(past_key_values: Optional[DynamicCache], layer_idx:
         return True
     return False
 
-def segment_tensor(t: torch.Tensor, start_idx: int, end_idx: int, seq_len: int) -> torch.Tensor:
+def segment_tensor(t, start_idx: int, end_idx: int, seq_len: int):
+    if isinstance(t, tuple):
+        return tuple(segment_tensor(item, start_idx, end_idx, seq_len) for item in t)
     if not isinstance(t, torch.Tensor):
         return t
+    if t.dim() == 1 and t.size(0) == seq_len:
+        return t[start_idx:end_idx]
     # common cases: (bsz, seq_len, ...), (bsz, seq_len), (seq_len, ...)
     if t.dim() >= 2 and t.size(1) == seq_len:
         return t[:, start_idx:end_idx, ...]
