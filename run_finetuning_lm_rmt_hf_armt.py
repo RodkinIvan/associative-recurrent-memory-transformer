@@ -153,7 +153,7 @@ if __name__ == '__main__':
     training_args_dict = {key: value for key, value in vars(args).items() if hasattr(TrainingArguments('.'), key)}
 
     training_args_dict['remove_unused_columns'] = False
-    training_args_dict['save_safetensors'] = False
+    training_args_dict['save_safetensors'] = True
     training_args_dict['bf16'] = True
     training_args_dict['label_names'] = ['labels']
     
@@ -175,9 +175,9 @@ if __name__ == '__main__':
     training_args_dict['report_to'] = 'wandb'
     # Push checkpoints to Hugging Face Hub every 1000 steps
     training_args_dict['save_strategy'] = 'steps'
-    training_args_dict['save_steps'] = 1000
-    training_args_dict['push_to_hub'] = True
-    training_args_dict['hub_strategy'] = 'every_save'
+    training_args_dict['save_steps'] = 500
+    # Hub pushing is handled entirely by PushToHubCallback (not the Trainer)
+    training_args_dict['push_to_hub'] = False
     # Avoid duplicating iterable streams across dataloader workers when streaming
     if args.streaming:
         training_args_dict['dataloader_num_workers'] = 0
@@ -990,7 +990,8 @@ if __name__ == '__main__':
             act_type="associative",
             time_penalty=0.0,
             model_dtype=args.model_dtype,
-            memory_dtype=args.memory_dtype
+            memory_dtype=args.memory_dtype,
+            attn_implementation=args.attn_implementation
         )
         if args.armt_impl =='mem_params' and args.freeze_base_model:
             armt_config.freeze_base_model = args.freeze_base_model
@@ -1050,7 +1051,7 @@ if __name__ == '__main__':
     # Create callbacks
     dataset_stats_callback = DatasetStatsCallback(train_dataset, expected_tokens)
     deepspeed_callback = DeepSpeedCheckpointCallback(
-        consolidate_on_save=training_args.push_to_hub,
+        consolidate_on_save=True,
         modeling_code_dir=os.path.join(args.working_dir, "modeling_amt"),
         model_class_name=model_class_name if args.num_mem_tokens is not None else None
     )
