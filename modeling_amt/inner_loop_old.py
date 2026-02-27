@@ -196,6 +196,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         gating: bool = False,
         use_sink: bool = False,
         sliding_window: bool = False,
+        attn_implementation: str = "flash_attention_2",
         memory_dtype: Optional[torch.dtype] = None,
         get_memory_fn: Optional[Callable[[], torch.Tensor]] = None,
         get_sink_fn: Optional[Callable[[], Optional[torch.Tensor]]] = None,
@@ -217,6 +218,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
         self.correction = correction
         self.use_sink = bool(use_sink)
         self.sliding_window_enabled = bool(sliding_window)
+        self.attn_implementation = attn_implementation
 
         # DPFP feature map dimensions
         nu = 3
@@ -483,7 +485,7 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
 
         if attention_mask is None:
             attention_mask = torch.ones(bsz, seq_len, device=hidden_states.device, dtype=hidden_states.dtype)
-            if self.sliding_window_enabled:
+            if self.sliding_window_enabled or self.attn_implementation != "flash_attention_2":
                 attention_mask = attn_mask_to_4d(attention_mask, upper=False, query_len=seq_len)
                 attention_mask = invert_attn_mask(attention_mask, hidden_states.dtype)
         out_full = []
@@ -555,8 +557,15 @@ class InnerLoopAssociativeLayerWrapper(nn.Module):
                     print(f"[H-SEG] L{self.info['layer']} seg_len={seg_len} seg_aug_len={seg_aug_len} mask={tuple(seg_mask.shape)}")
             else:
                 if attn_mask.dim() == 4:
-                    attn_mask = attn_mask_to_2d(attn_mask)
-                seg_mask = self.pad_attention_mask(attn_mask, dtype=seg_aug.dtype)
+                    if self.attn_implementation == "flash_attention_2":
+                        attn_mask = attn_mask_to_2d(attn_mask)
+                        seg_mask = self.pad_attention_mask(attn_mask, dtype=seg_aug.dtype)
+                    else:
+                        base_cur4d = reverse_invert_attn_mask(attn_mask)
+                        seg_mask = self.pad_attention_mask(base_cur4d, dtype=seg_aug.dtype)
+                        seg_mask = invert_attn_mask(seg_mask, seg_aug.dtype)
+                else:
+                    seg_mask = self.pad_attention_mask(attn_mask, dtype=seg_aug.dtype)
             # print("seg_mask", reverse_invert_attn_mask(seg_mask)[0][0])
             # print("seg_mask", seg_mask.shape)
             seg_pos_ids = self._get_segment_positions(kwargs.get("position_ids", None), start, end, seg_aug.device)
@@ -690,6 +699,16 @@ class InnerLoopARMTForCausalLM(PreTrainedModel, GenerationMixin):
             raise ValueError("Exactly one of `base_model_name` or `base_model_config` must be provided in config.")
         model_dtype = _resolve_torch_dtype(getattr(config, "model_dtype", "float32"), default=torch.float32)
         memory_dtype = _resolve_torch_dtype(getattr(config, "memory_dtype", None), default=model_dtype)
+        attn_implementation = getattr(config, "attn_implementation", None)
+        if attn_implementation is None:
+            if getattr(config, "sliding_window_enabled", False):
+                attn_implementation = "eager"
+            else:
+                attn_implementation = "flash_attention_2"
+        if attn_implementation == "flash_attention_2" and getattr(config, "sliding_window_enabled", False):
+            attn_implementation = "eager"
+            warnings.warn("Flash attention 2 is not supported for sliding window attention. Using eager instead.")
+
         if bm_cfg is not None:
             if isinstance(bm_cfg, PretrainedConfig) and getattr(bm_cfg, "model_type", None) != getattr(config, "model_type", None):
                 resolved_cfg = bm_cfg
@@ -715,16 +734,8 @@ class InnerLoopARMTForCausalLM(PreTrainedModel, GenerationMixin):
             base_model = base_model.to(dtype=model_dtype)
         elif bm_name is not None:
             from transformers import AutoModelForCausalLM as HF_AutoModelForCausalLM
-            attn_implementation = config.attn_implementation
-            if attn_implementation is None:
-                if config.sliding_window_enabled:
-                    attn_implementation = "eager"
-                else:
-                    attn_implementation = "flash_attention_2"
-                    assert model_dtype == "bfloat16" or model_dtype == "bf16" or model_dtype == "torch.bfloat16" or model_dtype == torch.bfloat16, f"Model dtype {model_dtype} is not supported for flash attention 2"
-            if attn_implementation == "flash_attention_2" and config.sliding_window_enabled:
-                attn_implementation = "eager"
-                warnings.warn("Flash attention 2 is not supported for sliding window attention. Using eager instead.")
+            if attn_implementation == "flash_attention_2":
+                assert model_dtype == "bfloat16" or model_dtype == "bf16" or model_dtype == "torch.bfloat16" or model_dtype == torch.bfloat16, f"Model dtype {model_dtype} is not supported for flash attention 2"
             base_model = HF_AutoModelForCausalLM.from_pretrained(
                 bm_name,
                 torch_dtype=model_dtype,
@@ -754,6 +765,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel, GenerationMixin):
         self.sliding_window_enabled = bool(getattr(config, "sliding_window_enabled", False))
         self.model_dtype = model_dtype
         self.memory_dtype = memory_dtype
+        self._attn_implementation = attn_implementation
 
         # Shared trainable memory embeddings (used by all layers)
         emb = self.model.get_input_embeddings()
@@ -810,6 +822,7 @@ class InnerLoopARMTForCausalLM(PreTrainedModel, GenerationMixin):
                     gating=self.gating,
                     use_sink=self.use_sink,
                     sliding_window=self.sliding_window_enabled,
+                    attn_implementation=self._attn_implementation,
                     memory_dtype=self.memory_dtype,
                     get_memory_fn=lambda self_ref=self: self_ref.memory,
                     get_sink_fn=lambda self_ref=self: getattr(self_ref, "sink", None),
