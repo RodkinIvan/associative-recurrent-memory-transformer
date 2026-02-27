@@ -29,6 +29,7 @@ DATASET_NAME=karpathy/fineweb-edu-100b-shuffle
 # VALID_DATASET_NAME=deepmind/pg19
 
 MODEL_NAME=google/gemma-3-1b-it
+# MODEL_NAME=meta-llama/Llama-3.2-1B
 MODEL_PATH=$MODEL_NAME
 
 
@@ -39,7 +40,7 @@ BS=1
 
 LR=1e-5
 SEGMENT_SIZE=1024
-MAX_N_SEGMENTS=7
+MAX_N_SEGMENTS=8
 MEMORY_SIZE=32
 D_MEM=64
 LAYERS_ATTR=model.layers
@@ -48,7 +49,7 @@ SAMPLE_SIZE=$((MAX_N_SEGMENTS*SEGMENT_SIZE)) # length of task sample in tokens
 GRAD_ACC_STEPS=$(($TBS/($BS*$NP)))
 SCHEDULER=linear
 
-for N in 20
+for N in 34
 do
 
 cd accel_configs/
@@ -109,7 +110,8 @@ accelerate launch --config_file $ACCEL_CONFIG --main_process_port $((29000+$N)) 
         --max_grad_norm 1.0 \
         --streaming --stream_chunk_docs 10000 \
         --model_dtype bfloat16 \
-        --memory_dtype bfloat16
+        --memory_dtype bfloat16 \
+        --attn_implementation flash_attention_2
         # --tokenized_dataset /mnt/data/users/ivan.rodkin/lab/datasets/pg19_tokenized
 done
 echo "done"
