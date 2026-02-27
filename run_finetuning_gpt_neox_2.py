@@ -138,7 +138,7 @@ if __name__ == '__main__':
         logger.warning('model_path is not set: config, logs and checkpoints will not be saved.')
 
     dataset_name_to_path = {
-        "ca": "XXXX/1dCA_r2s20T20",
+        "ca": "irodkin/1dCA_r2s20T20",
         # put your dataset_name -> dataset_path mappings here
     }
     dataset_path = dataset_name_to_path[args.dataset_name]
@@ -411,10 +411,18 @@ if __name__ == '__main__':
                 model.split_tensor = spliter
     # load RMT checkpoint if needed
     if args.model_cpt and args.model_cpt != 'None':
-        model_cpt = os.path.join(args.model_cpt, "model_best/pytorch_model.bin")
-        cpt = torch.load(model_cpt, map_location='cpu')
-        model.load_state_dict(cpt)
-        logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+        try:
+            model_cpt = os.path.join(args.model_cpt, "model_best.pth")
+            cpt = torch.load(model_cpt, map_location='cpu')
+            model.load_state_dict(cpt)
+            logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+        except:
+            import safetensors
+            model_cpt = os.path.join(args.model_cpt, "model_best/model.safetensors")
+            cpt = safetensors.torch.load_file(model_cpt)
+            w = model.load_state_dict(cpt, strict=True)
+            logger.info(f'Loaded RMT state dict from: {args.model_cpt}')
+            logger.info(f'loaded model with mis w {w}')
 
     if args.freeze_model_weights:
         for n, p in model.named_parameters():
@@ -527,7 +535,7 @@ if __name__ == '__main__':
         # We only do this if we're in ca_adaptive
         if args.task_name == "ca_adaptive" and 'shift' in data:
             shift_vals = data['shift'].cpu().numpy()  # shape: (batch_size,)
-            for shift_id in [1, 2, 3, 4]:
+            for shift_id in range(1, args.num_predict+1):
                 mask = (shift_vals == shift_id)
                 if not np.any(mask):
                     continue  # no samples had this shift in this batch
