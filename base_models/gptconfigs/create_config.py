@@ -3,8 +3,9 @@ import json
 import argparse
 from pathlib import Path
 
-home = Path.home()
-save_folder = f"{home}/rmt/wip/base_models/gptconfigs/"
+# home = Path.home()
+# save_folder = f"{home}/rmt/wip/base_models/gptconfigs/"
+save_folder = "./"
 default_config = {
   "architectures": [
     "GPTNeoXForCausalLM"
