@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import os
 from dataclasses import dataclass
 from transformers.modeling_outputs import ModelOutput
+from modeling_amt.utils import DPFP
 
 @dataclass
 class ARMTOutput(ModelOutput):
