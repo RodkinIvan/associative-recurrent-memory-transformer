@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 NP=1 # ./test_bert_sparse_pretrain_train_valid.sh
 export NCCL_ASYNC_ERROR_HANDLING=0
 set -e
@@ -19,11 +19,11 @@ TASK_NAME=ca_oo
 ITERS=40000
 TBS=256
 
-MAX_N_SEGMENTSS=(10)
-MAX_VAL_SEGMENTSS=(10)
-SHIFTS=(1)
-LRS=(3e-4)      
-BSS=(256)
+MAX_N_SEGMENTSS=(10 10 10 10)
+MAX_VAL_SEGMENTSS=(10 10 10 10)
+NUM_PREDICTS=(1 2 3 4)
+LRS=(3e-4 3e-4 3e-4 3e-4)      
+BSS=(256 256 256 256)
 
 INPUT_TOKENS=1000
 N_HEADS=1
@@ -41,9 +41,9 @@ ACT_TYPE=layer
 cd base_models/gptconfigs
 python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num_attention_heads $NUM_LAYERS
 cd ../..
-MODEL_CFG=~/associative-recurrent-memory-transformer/base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
+MODEL_CFG=./base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
-for N in 10 11
+for N in 12
 do
 
 
@@ -58,7 +58,7 @@ INPUT_SEQ_LEN=$(((INPUT_SIZE)*MAX_N_SEGMENTS))
 TGT_LEN=$INPUT_SEQ_LEN
 LR_=${LRS[j]}
 VAL_SEQ_LEN=$(((INPUT_SIZE)*MAX_VAL_SEGMENTS))
-SHIFT=${SHIFTS[j]}
+NUM_PREDICT=${NUM_PREDICTS[j]}
 
 BS=${BSS[j]}
 K2=-1
@@ -73,11 +73,22 @@ do
 
 MODEL_CPT=None
 
+if [[ $j -eq 0 ]]; then
+    MODEL_CPT=None
+else
+    PREV_NUM_PREDICT=${NUM_PREDICTS[j-1]}
+    PREV_LR=${LRS[j-1]}
+    PREV_MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j-1]}
+    PREV_INPUT_SEQ_LEN=$(((INPUT_SIZE)*PREV_MAX_N_SEGMENTS))
+    MODEL_CPT=../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${PREV_LR}_${SCHEDULER}_dmem${D_MEM}_${PREV_INPUT_SEQ_LEN}-${PREV_MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_NUM_PREDICT${PREV_NUM_PREDICT}/run_$N
+fi
+
+export WANDB_NAME=gptneox_oo_s${NUM_PREDICT}_N$N
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port 29503 run_finetuning_gpt_neox_2.py \
+accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $(($N+29500)) run_finetuning_gpt_neox_2.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}/run_$N \
+        --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_NUM_PREDICT${NUM_PREDICT}/run_$N \
         --model_cfg $MODEL_CFG \
         --dataset_name $DATASET_NAME \
         --memory_cell_cls $MEMORY_CELL \
@@ -89,7 +100,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --max_n_segments $MAX_N_SEGMENTS \
         --num_timesteps $MAX_N_SEGMENTS \
         --num_test_timesteps $MAX_VAL_SEGMENTS \
-        --prediction_shift $SHIFT \
+        --num_predict $NUM_PREDICT \
         --optimize_metric exact_match --optimize_mode max \
         --batch_size $BS \
         --gradient_accumulation_steps $(($TBS/$BS/$NP)) \
@@ -100,7 +111,7 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --data_n_workers 2 \
         --log_interval 50 --valid_interval 250 \
         --show_valid_examples 5 \
-        --early_stopping_patience 10000 \
+        --early_stopping_patience 50 \
         --seed $(($N+42*$j)) \
         --clip_grad_value 1.0 \
         --save_best \
@@ -108,7 +119,8 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --layers_attr $LAYERS_ATTR \
         --num_mem_tokens $MEMORY_SIZE \
         --max_hop $MAX_HOP \
-        --freeze_mem
+        --freeze_mem \
+        --model_cpt $MODEL_CPT
 done
 done
 done
