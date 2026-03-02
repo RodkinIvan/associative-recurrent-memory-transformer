@@ -24,7 +24,7 @@ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-$(nvidia-smi --query-gpu=ind
 export NP=$(echo $CUDA_VISIBLE_DEVICES | awk -F',' '{print NF}')
 
 # Update training launcher (must be run from its folder) to consume all GPUs automatically
-sed -i 's/^export CUDA_VISIBLE_DEVICES=.*/export CUDA_VISIBLE_DEVICES='$CUDA_VISIBLE_DEVICES'/' finetune_armt_inner_llama3.2_cc_sliding_deepspeed.sh
+sed -i 's/^export CUDA_VISIBLE_DEVICES=.*/export CUDA_VISIBLE_DEVICES='$CUDA_VISIBLE_DEVICES'/' finetune_armt_inner_gemma3-1b_fineweb_deepspeed.sh
 
 # 4) Launch training from scripts/pretrain
 bash ./finetune_armt_inner_llama3.2_cc_sliding_deepspeed.sh
