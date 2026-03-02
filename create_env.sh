@@ -32,7 +32,7 @@ conda run -n "${ENV_NAME}" bash -c "
 
   # 2) Core deps
   python -m pip install \
-    wandb transformers datasets accelerate deepspeed tensorboard munch \
+    wandb transformers==4.57.1 datasets accelerate deepspeed==0.16.4 tensorboard munch \
     peft ipywidgets ipykernel bitsandbytes einops tqdm lightning fvcore trl pyyaml
 
   # 3) FlashAttention built cleanly *against this Torch*
