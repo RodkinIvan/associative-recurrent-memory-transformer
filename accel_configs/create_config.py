@@ -55,7 +55,7 @@ parser.add_argument("--train_micro_batch_size_per_gpu", default=256)
 parser.add_argument("--gradient_accumulation_steps", default=1)
 parser.add_argument("--np", default=1)
 parser.add_argument("--gradient_clipping", default=1.0)
-parser.add_argument("--stage", default=2)
+parser.add_argument("--stage", type=int, default=2)
 # parser.add_argument('--h', type=str, help='path to model configuration file (default: "")')
 
 args = parser.parse_args()
