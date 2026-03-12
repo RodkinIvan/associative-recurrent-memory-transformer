@@ -43,7 +43,7 @@ python create_config.py --hidden_size $DIM --num_hidden_layers $NUM_LAYERS --num
 cd ../..
 MODEL_CFG=./base_models/gptconfigs/neox_tiny_${NUM_LAYERS}l${NUM_LAYERS}hd${DIM}.json
 
-for N in 12
+for N in 10 11 12
 do
 
 
@@ -80,7 +80,7 @@ else
     PREV_LR=${LRS[j-1]}
     PREV_MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j-1]}
     PREV_INPUT_SEQ_LEN=$(((INPUT_SIZE)*PREV_MAX_N_SEGMENTS))
-    MODEL_CPT=../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${PREV_LR}_${SCHEDULER}_dmem${D_MEM}_${PREV_INPUT_SEQ_LEN}-${PREV_MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_NUM_PREDICT${PREV_NUM_PREDICT}/run_$N
+    MODEL_CPT=../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${PREV_LR}_${SCHEDULER}_dmem${D_MEM}_${PREV_INPUT_SEQ_LEN}-${PREV_MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_NUM_PREDICT${PREV_NUM_PREDICT}_act$ACT_TYPE/run_$N
 fi
 
 export WANDB_NAME=gptneox_oo_s${NUM_PREDICT}_N$N
@@ -88,7 +88,7 @@ echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $BACKBONE_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
 accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_process_port $(($N+29500)) run_finetuning_gpt_neox_2.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_NUM_PREDICT${NUM_PREDICT}/run_$N \
+        --model_path ../runs/lm_long/amt/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_dmem${D_MEM}_${INPUT_SEQ_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_NUM_PREDICT${NUM_PREDICT}_act$ACT_TYPE/run_$N \
         --model_cfg $MODEL_CFG \
         --dataset_name $DATASET_NAME \
         --memory_cell_cls $MEMORY_CELL \

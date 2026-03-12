@@ -7,6 +7,9 @@ import random
 import numpy as np
 import transformers
 from datasets import load_dataset
+from datasets.features.features import _FEATURE_TYPES, Sequence
+if "List" not in _FEATURE_TYPES:
+    _FEATURE_TYPES["List"] = Sequence
 from torch.utils.data import DataLoader
 from lm_experiments_tools import Trainer, TrainerArgs
 from transformers import AutoConfig, HfArgumentParser
