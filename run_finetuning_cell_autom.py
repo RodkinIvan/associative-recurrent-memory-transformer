@@ -131,7 +131,7 @@ parser.add_argument('--freeze_mem', action='store_true', default=False,
 parser.add_argument('--no_correction', action='store_true', default=False,
                     help='ARMT shmidhuber correction for rewriting')
 parser.add_argument('--desired_metric', type=float, default=1.0, help='metric to stop training')
-parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'mem_params'], default='outer',
+parser.add_argument('--armt_impl', type=str, choices=['outer', 'inner', 'new', 'mem_params'], default='outer',
                     help='ARMT implementation: outer (AssociativeRecurrentWrapper) or inner (per-layer inner-loop)')
 # XXXX # RMT args 
 parser.add_argument('--input_size', type=int, default=None, help='maximal input size of the backbone model')
@@ -367,7 +367,13 @@ if __name__ == '__main__':
 
     logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
-        model_cfg = AutoConfig.from_pretrained(args.model_cfg)
+        if os.path.isfile(args.model_cfg):
+            with open(args.model_cfg) as config_file:
+                config_dict = json.load(config_file)
+            model_type = config_dict.pop('model_type')
+            model_cfg = AutoConfig.for_model(model_type, **config_dict)
+        else:
+            model_cfg = AutoConfig.from_pretrained(args.model_cfg)
 
         if 'lstm' in args.model_path:
             model_cfg = model_cfg.to_dict()
@@ -402,23 +408,27 @@ if __name__ == '__main__':
         cpt = safetensors.torch.load_file(model_cpt)
         w = model.load_state_dict(cpt, strict=True)
         logger.info(f'loaded model with mis w {w}')
-        if args.armt_impl == 'inner':
+        if args.armt_impl in ['inner', 'new']:
             backbone_state_dict = cpt
 
-    use_inner_armt = args.armt_impl in ['inner', 'mem_params']
+    use_inner_armt = args.armt_impl in ['inner', 'new', 'mem_params']
     if use_inner_armt:
         assert not args.act_on, "Not yet implemented"
         if args.num_mem_tokens is None:
             raise ValueError('--armt_impl inner requires --num_mem_tokens to be set')
-        from modeling_amt.model import ARMTConfig
         if args.armt_impl == 'inner':
+            from modeling_amt.model import ARMTConfig
             from modeling_amt.inner_loop import InnerLoopARMTForCausalLM
             armt_model_cls = InnerLoopARMTForCausalLM
+        elif args.armt_impl == 'new':
+            from src.armt import ARMTConfig, ARMTForCausalLM
+            armt_model_cls = ARMTForCausalLM
         elif args.armt_impl == 'mem_params':
+            from modeling_amt.model import ARMTConfig
             from modeling_amt.armt_memory_params import MemoryParamsARMTForCausalLM
             armt_model_cls = MemoryParamsARMTForCausalLM        
         layers_attr = args.layers_attr if args.layers_attr is not None else 'model.layers'
-        armt_config = ARMTConfig(
+        armt_config_kwargs = dict(
             base_model_name=armt_base_model_name,
             base_model_config=armt_base_model_config,
             num_mem_tokens=args.num_mem_tokens,
@@ -426,9 +436,10 @@ if __name__ == '__main__':
             segment_size=block_size,
             segment_alignment='left',
             layers_attr=layers_attr,
-            wrap_pos=args.wrap_pos,
-            n_heads=1,
         )
+        if args.armt_impl != 'new':
+            armt_config_kwargs.update(wrap_pos=args.wrap_pos, n_heads=1)
+        armt_config = ARMTConfig(**armt_config_kwargs)
         logger.info(f'Creating HF-compatible ARMT model (impl={args.armt_impl})')
         model = armt_model_cls(config=armt_config)
         logger.info(f'Created HF-compatible ARMT model (impl={args.armt_impl})')
