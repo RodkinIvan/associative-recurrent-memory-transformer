@@ -102,7 +102,7 @@ class SlidingWindowAssociativeLayer(AssociativeLayer):
 
         batch, length = hidden_states.shape[:2]
         full_mask = self._to_2d(kwargs.get("attention_mask"), batch, length, hidden_states.device)
-        memory, first = self._initial_state(hidden_states)
+        memory, denominator, first = self._initial_state(hidden_states)
         cache_state = self.cache_state if self.persist_memory else None
         past_mask = self.past_attention_mask if self.persist_memory else None
         outputs, last_output = [], None
@@ -113,7 +113,7 @@ class SlidingWindowAssociativeLayer(AssociativeLayer):
             segment = hidden_states[:, start:end]
             current_mask = full_mask[:, start:end]
             if self.associative and not first:
-                segment = segment + self._read(segment, memory)
+                segment = segment + self._read(segment, memory, denominator)
 
             cache = self._cache(cache_state, segment.device)
             past_length = 0 if cache_state is None else cache_state[0].shape[-2]
@@ -135,7 +135,9 @@ class SlidingWindowAssociativeLayer(AssociativeLayer):
             last_output = self.layer(segment, **layer_kwargs)
             transformed = last_output[0] if isinstance(last_output, tuple) else last_output
             if self.associative:
-                memory = self._write(transformed[:, -self.num_mem_tokens :], memory, first)
+                memory, denominator = self._write(
+                    transformed[:, -self.num_mem_tokens :], memory, denominator, first
+                )
             first = False
             outputs.append(transformed)
 
@@ -151,7 +153,7 @@ class SlidingWindowAssociativeLayer(AssociativeLayer):
 
         if self.persist_memory:
             if self.associative:
-                self.memory_state = memory, first
+                self.memory_state = memory, denominator, first
             self.cache_state = cache_state
             self.past_attention_mask = past_mask
         merged = torch.cat(outputs, dim=1)
@@ -181,6 +183,8 @@ class ARMTSlidingWindowForCausalLM(ARMTForCausalLM):
             segment_size=self.segment_size,
             memory_dtype=self.memory_dtype,
             layer_index=index,
+            correction=self.config.correction,
+            use_denom=self.config.use_denom,
             use_sink=self.use_sink,
             rotary_fn=self.rotary_fn,
             associative=associative,

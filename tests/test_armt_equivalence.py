@@ -195,12 +195,39 @@ class EquivalenceTest(unittest.TestCase):
                             parameter.grad, reference.grad, atol=2e-6, rtol=2e-6, msg=name
                         )
 
+    def test_horizontal_vertical_gradients_are_equivalent(self):
+        torch.manual_seed(31)
+        input_ids = torch.randint(0, 97, (2, 13))
+        labels_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        labels_mask[:, 2::4] = False
+        for windowed, use_sink in ((False, False), (True, False), (True, True)):
+            with self.subTest(windowed=windowed, use_sink=use_sink):
+                horizontal = build(windowed=windowed, use_sink=use_sink)
+                vertical = build(windowed=windowed, use_sink=use_sink)
+                vertical.load_state_dict(horizontal.state_dict())
+                vertical.vertical_mode = True
+
+                horizontal(
+                    input_ids, labels=input_ids, labels_mask=labels_mask
+                ).loss.backward()
+                vertical(
+                    input_ids, labels=input_ids, labels_mask=labels_mask
+                ).loss.backward()
+
+                horizontal_gradients = dict(horizontal.named_parameters())
+                for name, parameter in vertical.named_parameters():
+                    reference = horizontal_gradients[name].grad
+                    if reference is None:
+                        self.assertIsNone(parameter.grad, name)
+                    else:
+                        torch.testing.assert_close(
+                            parameter.grad, reference, atol=2e-6, rtol=2e-6, msg=name
+                        )
+
     def test_configuration_surface_excludes_removed_options(self):
         removed = {
             "attend_to_previous_input",
             "wrap_pos",
-            "correction",
-            "use_denom",
             "gating",
             "n_heads",
             "act_on",
@@ -215,11 +242,26 @@ class EquivalenceTest(unittest.TestCase):
         }
         self.assertTrue(removed.isdisjoint(inspect.signature(ARMTConfig).parameters))
         self.assertNotIn("sliding_window", inspect.signature(ARMTSlidingWindowConfig).parameters)
+        self.assertTrue(ARMTConfig(base_model_config=BASE).correction)
+        self.assertTrue(ARMTConfig(base_model_config=BASE).use_denom)
         self.assertIn("use_sink", inspect.signature(ARMTSlidingWindowConfig).parameters)
         with self.assertRaises(TypeError):
-            ARMTConfig(correction=True)
-        with self.assertRaises(TypeError):
             ARMTSlidingWindowConfig(sliding_window=True)
+
+    def test_freeze_memory_configuration(self):
+        model = ARMTForCausalLM(
+            ARMTConfig(
+                base_model_config=BASE,
+                layers_attr="transformer.h",
+                num_mem_tokens=2,
+                d_mem=8,
+                segment_size=5,
+                freeze_mem=True,
+            )
+        )
+        for layer in model.get_layers():
+            for projection in (layer.W_mq, layer.W_mk, layer.W_mv, layer.W_mb):
+                self.assertTrue(all(not parameter.requires_grad for parameter in projection.parameters()))
 
     @torch.no_grad()
     def test_hugging_face_save_and_load_round_trip(self):

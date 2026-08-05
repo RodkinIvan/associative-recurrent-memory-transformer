@@ -31,7 +31,7 @@ LLAMA = LlamaConfig(
 )
 
 
-def build_pair(windowed, base, use_sink=False):
+def build_pair(windowed, base, use_sink=False, correction=False, use_denom=False):
     layers_attr = "transformer.h" if isinstance(base, dict) else "model.layers"
     common = dict(
         base_model_config=base,
@@ -49,8 +49,8 @@ def build_pair(windowed, base, use_sink=False):
             **common,
             sliding_window=windowed,
             use_sink=use_sink,
-            correction=False,
-            use_denom=False,
+            correction=correction,
+            use_denom=use_denom,
             gating=False,
             n_heads=1,
         )
@@ -61,10 +61,14 @@ def build_pair(windowed, base, use_sink=False):
     torch.manual_seed(17)
     if windowed:
         current = ARMTSlidingWindowForCausalLM(
-            ARMTSlidingWindowConfig(**common, use_sink=use_sink)
+            ARMTSlidingWindowConfig(
+                **common, use_sink=use_sink, correction=correction, use_denom=use_denom
+            )
         ).eval()
     else:
-        current = ARMTForCausalLM(ARMTConfig(**common)).eval()
+        current = ARMTForCausalLM(
+            ARMTConfig(**common, correction=correction, use_denom=use_denom)
+        ).eval()
     current.load_state_dict(legacy.state_dict())
     return legacy, current
 
@@ -73,15 +77,27 @@ class LegacyParityTest(unittest.TestCase):
     @torch.no_grad()
     def test_matches_legacy_fixed_behavior(self):
         cases = [
-            (False, GPT2, False),
-            (False, LLAMA, False),
-            (True, GPT2, False),
-            (True, GPT2, True),
-            (True, LLAMA, False),
+            (False, GPT2, False, False, False),
+            (False, LLAMA, False, False, False),
+            (True, GPT2, False, False, False),
+            (True, GPT2, True, False, False),
+            (True, LLAMA, False, False, False),
+            (False, GPT2, False, False, True),
+            (False, GPT2, False, True, True),
+            (False, LLAMA, False, True, True),
+            (True, GPT2, False, True, True),
         ]
-        for windowed, base, use_sink in cases:
-            with self.subTest(windowed=windowed, model=base.model_type if hasattr(base, "model_type") else "gpt2", sink=use_sink):
-                legacy, current = build_pair(windowed, base, use_sink)
+        for windowed, base, use_sink, correction, use_denom in cases:
+            with self.subTest(
+                windowed=windowed,
+                model=base.model_type if hasattr(base, "model_type") else "gpt2",
+                sink=use_sink,
+                correction=correction,
+                use_denom=use_denom,
+            ):
+                legacy, current = build_pair(
+                    windowed, base, use_sink, correction, use_denom
+                )
                 for vertical in (False, True):
                     legacy.vertical_mode = vertical
                     current.vertical_mode = vertical

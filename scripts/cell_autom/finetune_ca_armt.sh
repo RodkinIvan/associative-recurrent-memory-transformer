@@ -116,13 +116,13 @@ accelerate launch --num_processes $NP --config_file  ./accelerate.yaml --main_pr
         --save_best \
         --d_mem $D_MEM \
         --layers_attr gpt_neox.layers \
-        --repeat_state \
-        --validate_only \
-        --act_on \
-        --max_hop $MAX_HOP \
-        --time_penalty 3e-4 \
-        --act_type $ACT_TYPE \
-        --noisy_halting
+        --repeat_state
+        # --validate_only \
+        # --act_on \
+        # --max_hop $MAX_HOP \
+        # --time_penalty 3e-4 \
+        # --act_type $ACT_TYPE \
+        # --noisy_halting
         # --act_format transformer
         # --freeze_mem
         # --repeat_state

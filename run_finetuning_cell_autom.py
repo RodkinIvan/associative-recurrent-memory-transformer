@@ -436,6 +436,9 @@ if __name__ == '__main__':
             segment_size=block_size,
             segment_alignment='left',
             layers_attr=layers_attr,
+            freeze_mem=args.freeze_mem,
+            correction=not args.no_correction,
+            use_denom=not args.no_denom,
         )
         if args.armt_impl != 'new':
             armt_config_kwargs.update(wrap_pos=args.wrap_pos, n_heads=1)

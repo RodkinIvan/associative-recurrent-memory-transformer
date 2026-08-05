@@ -54,14 +54,12 @@ class ARMTConfig(PretrainedConfig):
         "act_type",
         "attend_to_previous_input",
         "constant_depth",
-        "correction",
         "gating",
         "max_hop",
         "n_heads",
         "noisy_halting",
         "sliding_window",
         "time_penalty",
-        "use_denom",
         "use_sink",
         "wrap_pos",
     }
@@ -76,6 +74,8 @@ class ARMTConfig(PretrainedConfig):
         segment_alignment: str = "left",
         layers_attr: str = "model.layers",
         freeze_mem: bool = False,
+        correction: bool = True,
+        use_denom: bool = True,
         model_dtype: str | torch.dtype = "float32",
         memory_dtype: str | torch.dtype | None = None,
         wrap_layers: list[bool] | None = None,
@@ -99,6 +99,8 @@ class ARMTConfig(PretrainedConfig):
         self.segment_alignment = segment_alignment
         self.layers_attr = layers_attr
         self.freeze_mem = freeze_mem
+        self.correction = correction
+        self.use_denom = use_denom
         self.model_dtype = str(model_dtype).removeprefix("torch.")
         self.memory_dtype = None if memory_dtype is None else str(memory_dtype).removeprefix("torch.")
         self.wrap_layers = wrap_layers
@@ -118,6 +120,8 @@ class AssociativeLayer(nn.Module):
         segment_size: int,
         memory_dtype: torch.dtype,
         layer_index: int,
+        correction: bool = True,
+        use_denom: bool = True,
         rotary_fn=None,
         associative: bool = True,
     ):
@@ -129,6 +133,8 @@ class AssociativeLayer(nn.Module):
         self.segment_size = segment_size
         self.memory_dtype = memory_dtype
         self.layer_index = layer_index
+        self.correction = correction
+        self.use_denom = use_denom
         self.rotary_fn = rotary_fn
         self.associative = associative
         parameters = inspect.signature(layer.forward).parameters
@@ -147,7 +153,7 @@ class AssociativeLayer(nn.Module):
             torch.nn.init.uniform_(self.W_mb.weight, -s, s)
             nn.init.ones_(self.W_mb.bias)
 
-        self.memory_state: tuple[Tensor, bool] | None = None
+        self.memory_state: tuple[Tensor, Tensor | None, bool] | None = None
         self.persist_memory = False
 
     def __getattr__(self, name: str):
@@ -162,16 +168,24 @@ class AssociativeLayer(nn.Module):
     def clone_state(self):
         if self.memory_state is None:
             return None
-        memory, first = self.memory_state
-        return memory.clone(), first
+        memory, denominator, first = self.memory_state
+        return memory.clone(), None if denominator is None else denominator.clone(), first
 
     def restore_state(self, state) -> None:
-        self.memory_state = None if state is None else (state[0].clone(), state[1])
+        self.memory_state = (
+            None
+            if state is None
+            else (state[0].clone(), None if state[1] is None else state[1].clone(), state[2])
+        )
 
     def detach_memory(self) -> None:
         if self.memory_state is not None:
-            memory, first = self.memory_state
-            self.memory_state = memory.detach(), first
+            memory, denominator, first = self.memory_state
+            self.memory_state = (
+                memory.detach(),
+                None if denominator is None else denominator.detach(),
+                first,
+            )
 
     def freeze_memory(self) -> None:
         if not self.associative:
@@ -179,29 +193,60 @@ class AssociativeLayer(nn.Module):
         for projection in (self.W_mq, self.W_mk, self.W_mv, self.W_mb):
             projection.requires_grad_(False)
 
-    def _initial_state(self, hidden_states: Tensor) -> tuple[Tensor | None, bool]:
+    def _initial_state(self, hidden_states: Tensor) -> tuple[Tensor | None, Tensor | None, bool]:
         if not self.associative:
-            return None, True
+            return None, None, True
         batch = hidden_states.shape[0]
         if self.persist_memory and self.memory_state is not None:
-            memory, first = self.memory_state
+            memory, denominator, first = self.memory_state
             if memory.shape[0] != batch:
                 raise ValueError("The recurrent batch size changed; reset memory before continuing")
-            return memory.to(hidden_states.device, self.memory_dtype), first
-        return hidden_states.new_zeros((batch, self.d_key, self.d_model), dtype=self.memory_dtype), True
+            memory = memory.to(hidden_states.device, self.memory_dtype)
+            if denominator is not None:
+                denominator = denominator.to(hidden_states.device, self.memory_dtype)
+            return memory, denominator, first
+        memory = hidden_states.new_zeros(
+            (batch, self.d_key, self.d_model), dtype=self.memory_dtype
+        )
+        denominator = (
+            hidden_states.new_zeros((batch, self.d_key), dtype=self.memory_dtype)
+            if self.use_denom
+            else None
+        )
+        return memory, denominator, True
 
-    def _read(self, hidden_states: Tensor, memory: Tensor) -> Tensor:
+    def _read(self, hidden_states: Tensor, memory: Tensor, denominator: Tensor | None) -> Tensor:
         query = F.normalize(_dpfp(self.W_mq(hidden_states.to(self.memory_dtype))), dim=-1)
         value = torch.einsum("blk,bkd->bld", query, memory)
+        if denominator is not None:
+            value = value / (torch.einsum("bk,blk->bl", denominator, query)[..., None] + 1e-5)
         return value.to(hidden_states.dtype)
 
-    def _write(self, tokens: Tensor, memory: Tensor, first: bool) -> Tensor:
+    def _write(
+        self, tokens: Tensor, memory: Tensor, denominator: Tensor | None, first: bool
+    ) -> tuple[Tensor, Tensor | None]:
         tokens = tokens.to(self.memory_dtype)
         key = F.normalize(_dpfp(self.W_mk(tokens)), dim=-1)
         value = self.W_mv(tokens)
-        previous = torch.zeros_like(value) if first else torch.einsum("bmk,bkd->bmd", key, memory)
+        coefficient = 1
+        if first:
+            previous = torch.zeros_like(value)
+        else:
+            previous = torch.einsum("bmk,bkd->bmd", key, memory)
+            if denominator is not None:
+                normalizer = torch.einsum("bk,bmk->bm", denominator, key)[..., None] + 1e-5
+                previous = previous / normalizer
+                if self.correction:
+                    coefficient = torch.clip(
+                        1 - normalizer / (torch.linalg.norm(key, dim=-1) ** 2)[..., None],
+                        0,
+                        1,
+                    ).detach()
         gate = torch.sigmoid(self.W_mb(tokens)).squeeze(-1)
-        return memory + torch.einsum("bmk,bmd,bm->bkd", key, value - previous, gate)
+        memory = memory + torch.einsum("bmk,bmd,bm->bkd", key, value - previous, gate)
+        if denominator is not None:
+            denominator = denominator + (coefficient * key).sum(dim=1)
+        return memory, denominator
 
     @staticmethod
     def _segment_mask(mask: Tensor | None, start: int, end: int) -> Tensor | None:
@@ -236,7 +281,7 @@ class AssociativeLayer(nn.Module):
             parameters = list(inspect.signature(self.layer.forward).parameters)[1:]
             kwargs.update({name: value for name, value in zip(parameters, args) if name not in kwargs})
         length = hidden_states.shape[1]
-        memory, first = self._initial_state(hidden_states)
+        memory, denominator, first = self._initial_state(hidden_states)
         outputs = []
         last_output = None
         width = self.segment_size + self.num_mem_tokens
@@ -245,16 +290,18 @@ class AssociativeLayer(nn.Module):
             end = min(start + width, length)
             segment = hidden_states[:, start:end]
             if self.associative and not first:
-                segment = segment + self._read(segment, memory)
+                segment = segment + self._read(segment, memory, denominator)
             last_output = self.layer(segment, **self._layer_kwargs(kwargs, start, end, length, segment))
             transformed = last_output[0] if isinstance(last_output, tuple) else last_output
             if self.associative:
-                memory = self._write(transformed[:, -self.num_mem_tokens :], memory, first)
+                memory, denominator = self._write(
+                    transformed[:, -self.num_mem_tokens :], memory, denominator, first
+                )
             first = False
             outputs.append(transformed)
 
         if self.persist_memory and self.associative:
-            self.memory_state = memory, first
+            self.memory_state = memory, denominator, first
         merged = torch.cat(outputs, dim=1)
         return (merged, *last_output[1:]) if isinstance(last_output, tuple) else merged
 
@@ -340,6 +387,8 @@ class ARMTForCausalLM(PreTrainedModel, GenerationMixin):
             segment_size=self.segment_size,
             memory_dtype=self.memory_dtype,
             layer_index=index,
+            correction=self.config.correction,
+            use_denom=self.config.use_denom,
             rotary_fn=self.rotary_fn,
             associative=associative,
         )
