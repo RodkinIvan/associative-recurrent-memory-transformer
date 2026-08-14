@@ -115,3 +115,45 @@ class LegacyParityTest(unittest.TestCase):
                         expected_loss = expected["loss"] if isinstance(expected, dict) else expected.loss
                         torch.testing.assert_close(actual.logits, expected_logits, atol=2e-6, rtol=2e-6)
                         torch.testing.assert_close(actual.loss, expected_loss, atol=2e-6, rtol=2e-6)
+
+    def test_gradients_match_legacy(self):
+        torch.manual_seed(19)
+        input_ids = torch.randint(0, 97, (2, 13))
+        labels_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        labels_mask[:, 2::4] = False
+
+        for windowed, use_sink in ((False, False), (True, False), (True, True)):
+            with self.subTest(windowed=windowed, use_sink=use_sink):
+                legacy, current = build_pair(
+                    windowed,
+                    GPT2,
+                    use_sink=use_sink,
+                    correction=True,
+                    use_denom=True,
+                )
+                legacy.train()
+                current.train()
+                torch.manual_seed(23)
+                legacy_loss = legacy(
+                    input_ids, labels=input_ids, labels_mask=labels_mask
+                ).loss
+                torch.manual_seed(23)
+                current_loss = current(
+                    input_ids, labels=input_ids, labels_mask=labels_mask
+                ).loss
+                torch.testing.assert_close(current_loss, legacy_loss, atol=2e-6, rtol=2e-6)
+                legacy_loss.backward()
+                current_loss.backward()
+
+                legacy_parameters = dict(legacy.named_parameters())
+                current_parameters = dict(current.named_parameters())
+                self.assertEqual(legacy_parameters.keys(), current_parameters.keys())
+                for name, reference_parameter in legacy_parameters.items():
+                    parameter = current_parameters[name]
+                    reference = reference_parameter.grad
+                    if reference is None:
+                        self.assertIsNone(parameter.grad, name)
+                    else:
+                        torch.testing.assert_close(
+                            parameter.grad, reference, atol=2e-6, rtol=2e-6, msg=name
+                        )

@@ -382,7 +382,7 @@ class Trainer:
         params = self.model.parameters()
         grad_norm = 0.0
         if self.args.clip_grad_value:
-            self.accelerator.clip_grad_norm_(params, self.args.clip_grad_value)
+            self.accelerator.clip_grad_value_(params, self.args.clip_grad_value)
             grad_norm = self._get_gradients_global_norm()
         elif self.args.clip_grad_norm:
             grad_norm = self.accelerator.clip_grad_norm_(params, self.args.clip_grad_norm)

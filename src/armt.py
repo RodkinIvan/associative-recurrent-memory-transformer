@@ -151,7 +151,6 @@ class AssociativeLayer(nn.Module):
             torch.nn.init.uniform_(self.W_mq.weight, -s, s)
             torch.nn.init.uniform_(self.W_mk.weight, -s, s)
             torch.nn.init.uniform_(self.W_mb.weight, -s, s)
-            nn.init.ones_(self.W_mb.bias)
 
         self.memory_state: tuple[Tensor, Tensor | None, bool] | None = None
         self.persist_memory = False
